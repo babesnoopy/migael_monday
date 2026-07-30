@@ -1,0 +1,21 @@
+{
+  "name": "migael_monday",
+  "version": "1.0.0",
+  "description": "Migael Monday - AI team assistant for Unformat Studio, LINE bot powered by Claude API",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "setup:oauth": "node oauth-setup.js",
+    "setup:calendars": "node list-calendars.js",
+    "seed:calendars": "node seed-calendars.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "@line/bot-sdk": "^9.4.1",
+    "@anthropic-ai/sdk": "^0.27.0",
+    "sql.js": "^1.10.3",
+    "googleapis": "^140.0.0",
+    "node-cron": "^3.0.3",
+    "dotenv": "^16.4.5"
+  }
+}
