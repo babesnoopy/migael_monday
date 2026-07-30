@@ -37,8 +37,10 @@ function pushRecent(groupId, entry) {
 // group's current tasks + upcoming events every time she's addressed.
 function getGroupDataSnapshot(groupId) {
   const tasks = db.all(
-    `SELECT t.title, t.status, u.display_name as assignee, t.due_date, t.is_urgent
-     FROM tasks t LEFT JOIN users u ON t.assignee_id = u.id
+    `SELECT t.title, t.status, u.display_name as assignee, tm.name as team, t.due_date, t.is_urgent
+     FROM tasks t
+     LEFT JOIN users u ON t.assignee_id = u.id
+     LEFT JOIN teams tm ON t.team_id = tm.id
      WHERE t.group_id = ? AND t.status != 'done'
      ORDER BY t.due_date`,
     [groupId]
@@ -66,7 +68,27 @@ async function handleEvent(event) {
     const groupId = event.source.groupId;
     gs.upsertGroup(groupId, null);
     return reply(event.replyToken,
-      'สวัสดีค่ะ เรามิเกล ผู้ช่วยเบ้บนะคะ 👋\nรบกวนทุกคนแนะนำตัวหน่อยค่ะ — ชื่ออะไร ทำหน้าที่อะไร รับผิดชอบเรื่องไหนบ้าง\n\n(รบกวนแอดมินพิมพ์ "มิเกล กลุ่มนี้คือโปรเจกต์ [ชื่อโปรเจกต์]" ด้วยนะคะ จะได้ผูก calendar ให้ถูกกลุ่ม)');
+      'สวัสดีค่ะ เรามิเกล ผู้ช่วยเบ้บนะคะ 👋\nรบกวนทุกคนแนะนำตัวหน่อยค่ะ — ชื่ออะไร ทำหน้าที่อะไร รับผิดชอบเรื่องไหนบ้าง\n\nเรื่องงาน/นัด: ถ้าบอกมาแบบมีเวลากำกับ มิเกลจะเตือนล่วงหน้าให้ก่อนถึงเวลา ถ้าบอกมาแบบมีแค่วัน (ไม่ระบุเวลา) มิเกลจะแวะเตือนเป็นระยะระหว่างวันนั้นแทน พองานเสร็จแล้วบอกได้เลยไม่ต้องถามซ้ำ แล้วเช็คสถานะงานระหว่างวันได้ตลอดเลยค่ะ\n\n(รบกวนแอดมินพิมพ์ "มิเกล กลุ่มนี้คือโปรเจกต์ [ชื่อโปรเจกต์]" ด้วยนะคะ จะได้ผูก calendar ให้ถูกกลุ่ม)');
+  }
+
+  // Someone joins the group later (after Migael's already in it) — greet
+  // them the same way as the initial onboarding, so nobody who joins after
+  // day 1 gets missed. LINE only gives userIds here, so fetch names to
+  // personalize the reply where possible.
+  if (event.type === 'memberJoined' && event.source.type === 'group') {
+    const groupId = event.source.groupId;
+    gs.upsertGroup(groupId, null);
+
+    const newMembers = event.joined?.members || [];
+    const names = (await Promise.all(
+      newMembers
+        .filter((m) => m.type === 'user')
+        .map((m) => client.getGroupMemberProfile(groupId, m.userId).then((p) => p.displayName).catch(() => null))
+    )).filter(Boolean);
+    const greetName = names.length ? names.join(', ') : '';
+
+    return reply(event.replyToken,
+      `สวัสดีค่ะ${greetName ? ' ' + greetName : ''} 👋 เรามิเกลนะคะ ยินดีต้อนรับเข้ากลุ่มค่ะ\nรบกวนแนะนำตัวหน่อยค่ะ — ชื่ออะไร ทำหน้าที่อะไร รับผิดชอบเรื่องไหนบ้าง`);
   }
 
   if (event.type !== 'message' || event.message.type !== 'text') return;

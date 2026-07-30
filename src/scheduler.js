@@ -267,12 +267,9 @@ cron.schedule('0 22 * * *', async () => {
       msg += `ยังค้าง: ${pending.map((p) => `${p.title}${p.assignee ? ' (' + p.assignee + ')' : ''}`).join(', ')}\n`;
     if (tomorrow.length) msg += `\nพรุ่งนี้:\n- ${tomorrow.map((t) => t.title).join('\n- ')}`;
 
+    // Group only gets the plain recap text — the .txt report link goes to
+    // Babeb personally below, not into the group.
     await push(g.id, msg.trim());
-
-    // Send the .txt report link right after the recap, into the same group.
-    if (reportUrl) {
-      await push(g.id, `รายงานภาพรวมวันนี้ (.txt) ค่ะ 📄\n${reportUrl}`);
-    }
   }
 
   // Personal summary to Babeb for manual sheet entry — sent to her 1:1 chat.

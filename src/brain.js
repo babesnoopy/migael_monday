@@ -55,7 +55,7 @@ async function interpret(ctx) {
     .join('\n');
 
   const tasksBlock = (ctx.groupData?.tasks || [])
-    .map((t) => `- ${t.title} | สถานะ: ${t.status} | ผู้รับผิดชอบ: ${t.assignee || 'ไม่ระบุ'} | กำหนด: ${t.due_date || '-'}${t.is_urgent ? ' | ด่วน' : ''}`)
+    .map((t) => `- ${t.title} | สถานะ: ${t.status} | แผนก: ${t.team || 'ไม่ระบุ'} | ผู้รับผิดชอบ: ${t.assignee || 'ไม่ระบุ'} | กำหนด: ${t.due_date || '-'}${t.is_urgent ? ' | ด่วน' : ''}`)
     .join('\n') || '(ไม่มีงานค้างในระบบตอนนี้)';
 
   const eventsBlock = (ctx.groupData?.events || [])
