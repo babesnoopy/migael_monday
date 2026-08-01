@@ -1253,9 +1253,6 @@ app.get('/debug/roster', (req, res) => {
 app.get('/debug/all-users', (req, res) => {
   res.json(db.all('SELECT id, display_name FROM users'));
 });
-app.get('/debug/events-today', (req, res) => {
-  res.json(db.all(`SELECT title, start_time, meeting_link FROM events WHERE date(start_time) = date('now') ORDER BY start_time`));
-});
 app.get('/debug/groups', (req, res) => {
   const groups = db.all('SELECT * FROM line_groups ORDER BY created_at DESC');
   // group_name is always null (never populated anywhere) — show member

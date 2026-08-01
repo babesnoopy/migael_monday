@@ -189,7 +189,7 @@ async function sendMorningBriefing({ force = false } = {}) {
     // meetings here. Confirmed bug via live test: task due-dates were
     // showing up as "4 มีตติ้งวันนี้" in the morning summary before this.
     `SELECT title, start_time, meeting_link FROM events
-     WHERE date(start_time) = date('now')
+     WHERE date(start_time) = date('now', '+7 hours')
        AND strftime('%H:%M:%S', start_time) IS NOT NULL
        AND strftime('%H:%M:%S', start_time) != '00:00:00'`
   );
@@ -262,7 +262,7 @@ async function sendAfternoonCheckin({ force = false } = {}) {
   const relevant = db.all(
     `SELECT t.title, u.id as assignee_id, u.display_name as assignee FROM tasks t
      LEFT JOIN users u ON t.assignee_id = u.id
-     WHERE t.status NOT IN ('done', 'cancelled') AND date(t.due_date) <= date('now')
+     WHERE t.status NOT IN ('done', 'cancelled') AND date(t.due_date) <= date('now', '+7 hours')
      ORDER BY t.due_date`
   );
   if (!relevant.length && !force) return;
@@ -333,7 +333,7 @@ async function checkOverdueTasks() {
   const overdue = db.all(
     `SELECT t.*, u.id as assignee_id2, u.display_name as assignee_name FROM tasks t
      LEFT JOIN users u ON t.assignee_id = u.id
-     WHERE t.status NOT IN ('done', 'cancelled') AND datetime(t.due_date) < datetime('now')`
+     WHERE t.status NOT IN ('done', 'cancelled') AND datetime(t.due_date) < datetime('now', '+7 hours')`
   );
 
   // Collect everything due for a reminder right now, then send ONE
@@ -417,13 +417,13 @@ async function sendEveningRecap({ force = false } = {}) {
     const done = db.all(
       `SELECT t.title, u.display_name as assignee FROM tasks t
        LEFT JOIN users u ON t.assignee_id = u.id
-       WHERE t.status = 'done' AND date(t.completed_at) = date('now')`
+       WHERE t.status = 'done' AND date(t.completed_at) = date('now', '+7 hours')`
     );
     const pending = db.all(
       `SELECT t.title, u.display_name as assignee, tm.name as team_name FROM tasks t
        LEFT JOIN users u ON t.assignee_id = u.id
        LEFT JOIN teams tm ON t.team_id = tm.id
-       WHERE t.status NOT IN ('done', 'cancelled') AND date(t.due_date) <= date('now')`
+       WHERE t.status NOT IN ('done', 'cancelled') AND date(t.due_date) <= date('now', '+7 hours')`
     );
 
     if (done.length || pending.length || force) {

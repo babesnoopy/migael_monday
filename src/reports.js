@@ -27,7 +27,12 @@ function ensureDir() {
 }
 
 function formatDate(d) {
-  return d.toISOString().slice(0, 10); // YYYY-MM-DD
+  // Bangkok date, not UTC — d.toISOString() is always UTC, which during
+  // 00:00-06:59 Bangkok time is still "yesterday" in UTC, mislabeling
+  // the report's own header date. Same class of bug as the SQL date('now')
+  // issue below (confirmed live: UTC was 1 Aug 22:44 while Bangkok was
+  // already 2 Aug 05:44 during testing).
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(d);
 }
 
 function taskLine(t) {
@@ -45,18 +50,18 @@ function generateDailyReport() {
   const done = db.all(
     `SELECT t.title, u.display_name as assignee FROM tasks t
      LEFT JOIN users u ON t.assignee_id = u.id
-     WHERE t.status = 'done' AND date(t.completed_at) = date('now')`
+     WHERE t.status = 'done' AND date(t.completed_at) = date('now', '+7 hours')`
   );
   const newToday = db.all(
     `SELECT t.title, u.display_name as assignee FROM tasks t
      LEFT JOIN users u ON t.assignee_id = u.id
-     WHERE t.note IS NULL AND date(t.created_at) = date('now') AND t.status NOT IN ('done', 'cancelled')`
+     WHERE t.note IS NULL AND date(t.created_at) = date('now', '+7 hours') AND t.status NOT IN ('done', 'cancelled')`
   );
   const stillPending = db.all(
     `SELECT t.title, u.display_name as assignee FROM tasks t
      LEFT JOIN users u ON t.assignee_id = u.id
      WHERE t.status NOT IN ('done', 'cancelled')
-       AND NOT (t.note IS NULL AND date(t.created_at) = date('now'))`
+       AND NOT (t.note IS NULL AND date(t.created_at) = date('now', '+7 hours'))`
   );
 
   const lines = [];
