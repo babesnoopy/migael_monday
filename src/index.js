@@ -227,7 +227,7 @@ async function handleEvent(event) {
       return reply(event.replyToken, 'ยังไม่มีใครแนะนำตัวในระบบเลยค่ะ');
     }
     const lines = roster.map((r) => `- ${r.display_name}${r.team ? ' (' + r.team + ')' : ' (ยังไม่ระบุแผนก)'}`);
-    return reply(event.replyToken, `ตอนนี้มิเกลรู้จัก ${roster.length} คนค่ะ:\n${lines.join('\n')}\n\n(group id: ${groupId})`);
+    return reply(event.replyToken, `ตอนนี้มิเกลรู้จัก ${roster.length} คนค่ะ:\n${lines.join('\n')}`);
   }
 
   // Deterministic admin command: manually trigger a sheet sync right now,
