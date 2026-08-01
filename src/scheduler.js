@@ -153,6 +153,20 @@ function dueLabel(dueDateStr, todayIso) {
   return `due ${weekday}`;
 }
 
+// Formats a real meeting's start_time like "31 ก.ค. 13:00 น." — per
+// spec, distinct from the header date format (no weekday needed here).
+function formatMeetingDateTime(dbDateString) {
+  const d = new Date(String(dbDateString).replace(' ', 'T'));
+  if (isNaN(d)) return String(dbDateString);
+  const datePart = new Intl.DateTimeFormat('th-TH', {
+    timeZone: 'Asia/Bangkok', day: 'numeric', month: 'short',
+  }).format(d);
+  const timePart = new Intl.DateTimeFormat('th-TH', {
+    timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(d);
+  return `${datePart} ${timePart} น.`;
+}
+
 // ---- Morning: what to do today, grouped by person, sorted by urgency ----
 async function sendMorningBriefing({ force = false } = {}) {
   const groupId = gs.getPrimaryGroupId();
@@ -168,7 +182,16 @@ async function sendMorningBriefing({ force = false } = {}) {
      ORDER BY t.due_date`
   );
   const events = db.all(
-    `SELECT title, start_time, meeting_link FROM events WHERE date(start_time) = date('now')`
+    // Real meetings only — excludes the all-day Calendar entries every
+    // task with a due date also gets (see index.js's createCalendarEvent
+    // calls with allDay:true). Those get stored with a midnight/no-time
+    // start_time, so filtering out '00:00:00' keeps only genuinely timed
+    // meetings here. Confirmed bug via live test: task due-dates were
+    // showing up as "4 มีตติ้งวันนี้" in the morning summary before this.
+    `SELECT title, start_time, meeting_link FROM events
+     WHERE date(start_time) = date('now')
+       AND strftime('%H:%M:%S', start_time) IS NOT NULL
+       AND strftime('%H:%M:%S', start_time) != '00:00:00'`
   );
 
   if (!tasks.length && !events.length && !roster.length && !force) return;
@@ -218,7 +241,7 @@ async function sendMorningBriefing({ force = false } = {}) {
   if (events.length) {
     msg += `\nมี ${events.length} มีตติ้งวันนี้ 👇\n`;
     for (const e of events) {
-      msg += `${e.title} – ${e.start_time}\n${e.meeting_link ? '🔗 ' + e.meeting_link : ''}\n`;
+      msg += `\n${e.title}\n${formatMeetingDateTime(e.start_time)}\n${e.meeting_link ? '🔗 ' + e.meeting_link : ''}\n`;
     }
   }
   if (!sortedPeople.length && !unassigned.length && !events.length) {

@@ -29,7 +29,7 @@ const SYNC_MARKER = 'sheet-sync';
 // S=สำคัญ?, T=ด่วน?, U=ระดับความยาก, V=กำหนดเสร็จ.
 // (An earlier version of this file had these offsets wrong — status and
 // due date were being read from the wrong columns entirely.)
-const COL = { startDate: 0, title: 1, category: 3, status: 5, isUrgent: 8, dueDate: 10 };
+const COL = { startDate: 0, title: 1, category: 3, assignee: 4, status: 5, isUrgent: 8, dueDate: 10 };
 
 function mapStatus(rawStatus) {
   const s = (rawStatus || '').trim();
@@ -68,6 +68,25 @@ function resolveTeamId(categoryName) {
   return team.id;
 }
 
+// Same idea as resolveTeamId above — find-or-create a user row by the
+// name in the sheet's "ผู้รับมอบหมาย" column. These are often people who
+// never chatted with Migael directly (so they'd have no real LINE
+// userId) — that's fine, this row exists purely so tasks can be grouped
+// and displayed by name; it just can't be @mentioned in LINE since
+// there's no real userId behind it. If that same person later
+// introduces themselves in chat, onboarding matches by display_name and
+// reuses this same row rather than creating a duplicate.
+function resolveAssigneeId(name) {
+  if (!name) return null;
+  const clean = name.trim();
+  if (!clean) return null;
+  const existing = db.get(`SELECT id FROM users WHERE display_name = ?`, [clean]);
+  if (existing) return existing.id;
+  const id = randomUUID();
+  db.run(`INSERT INTO users (id, display_name) VALUES (?, ?)`, [id, clean]);
+  return id;
+}
+
 async function findSpreadsheetId() {
   if (process.env.UNFEST_CHECKLIST_SHEET_ID) return process.env.UNFEST_CHECKLIST_SHEET_ID;
   const results = await driveApi.search("UNFEST'26_CHECKLIST");
@@ -93,11 +112,12 @@ async function run() {
     const rows = res.data.values || [];
 
     const existingTasks = new Map(
-      db.all(`SELECT id, title, team_id, start_date, status, note FROM tasks`).map((t) => [t.title.trim().toLowerCase(), t])
+      db.all(`SELECT id, title, team_id, assignee_id, start_date, status, note FROM tasks`).map((t) => [t.title.trim().toLowerCase(), t])
     );
 
     let importedCount = 0;
     let categorizedCount = 0;
+    let assignedCount = 0;
     let statusSyncedCount = 0;
 
     for (const row of rows) {
@@ -105,6 +125,7 @@ async function run() {
       if (!title || title === 'สิ่งที่ต้องทำ') continue; // blank row or a repeated header
 
       const category = row[COL.category]?.trim() || null;
+      const assigneeName = row[COL.assignee]?.trim() || null;
       const key = title.toLowerCase();
       const existing = existingTasks.get(key);
 
@@ -130,6 +151,18 @@ async function run() {
           db.run(`UPDATE tasks SET team_id = ? WHERE id = ?`, [resolveTeamId(category), existing.id]);
           categorizedCount++;
         }
+        // Bug fix: assignee was never imported from the sheet at all
+        // (COL had no entry for the "ผู้รับมอบหมาย" column) — every
+        // sheet-synced task showed up as "ยังไม่ระบุผู้รับผิดชอบ"
+        // (unassigned) in the morning summary/check-in/evening recap,
+        // even though the sheet clearly had a name in that column for
+        // almost every row. Backfill it here the same way category is
+        // backfilled, so tasks imported before this fix get corrected
+        // on the very next sync rather than needing a manual reset.
+        if (!existing.assignee_id && assigneeName) {
+          db.run(`UPDATE tasks SET assignee_id = ? WHERE id = ?`, [resolveAssigneeId(assigneeName), existing.id]);
+          assignedCount++;
+        }
         if (!existing.start_date && startDate) {
           db.run(`UPDATE tasks SET start_date = ? WHERE id = ?`, [startDate, existing.id]);
         }
@@ -146,19 +179,20 @@ async function run() {
         continue;
       }
 
-      // New row Migael hasn't seen before — import it in full, category included.
+      // New row Migael hasn't seen before — import it in full, category
+      // and assignee included.
       const id = randomUUID();
       db.run(
-        `INSERT INTO tasks (id, title, status, due_date, note, completed_at, team_id, is_urgent, start_date)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [id, title, status, dueDate, SYNC_MARKER, completed ? dueDate : null, resolveTeamId(category), isUrgentValue(row[COL.isUrgent]) ? 1 : 0, startDate]
+        `INSERT INTO tasks (id, title, status, due_date, note, completed_at, team_id, assignee_id, is_urgent, start_date)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, title, status, dueDate, SYNC_MARKER, completed ? dueDate : null, resolveTeamId(category), resolveAssigneeId(assigneeName), isUrgentValue(row[COL.isUrgent]) ? 1 : 0, startDate]
       );
-      existingTasks.set(key, { id, title, team_id: category ? 'set' : null });
+      existingTasks.set(key, { id, title, team_id: category ? 'set' : null, assignee_id: assigneeName ? 'set' : null });
       importedCount++;
     }
 
-    if (importedCount > 0 || categorizedCount > 0 || statusSyncedCount > 0) {
-      console.log(`[SheetSync] Imported ${importedCount} new task(s), backfilled category on ${categorizedCount}, synced status on ${statusSyncedCount} existing task(s).`);
+    if (importedCount > 0 || categorizedCount > 0 || assignedCount > 0 || statusSyncedCount > 0) {
+      console.log(`[SheetSync] Imported ${importedCount} new task(s), backfilled category on ${categorizedCount}, backfilled assignee on ${assignedCount}, synced status on ${statusSyncedCount} existing task(s).`);
     }
   } catch (err) {
     console.error('[SheetSync] Failed:', err.message);
