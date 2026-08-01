@@ -312,7 +312,7 @@ async function handleEvent(event) {
       ? gs.openSession(groupId, userId)
       : null;
 
-  console.log(`[Decision] text="${text}" intent=${decision.intent} needs_clarification=${decision.needs_clarification} participate=${decision.participate} is_meeting=${decision.extracted?.is_meeting} calendar_name=${decision.extracted?.calendar_name} stated_name=${decision.extracted?.stated_name} team_name=${decision.extracted?.team_name}`);
+  console.log(`[Decision] group=${groupId} text="${text}" intent=${decision.intent} needs_clarification=${decision.needs_clarification} participate=${decision.participate} is_meeting=${decision.extracted?.is_meeting} calendar_name=${decision.extracted?.calendar_name} stated_name=${decision.extracted?.stated_name} team_name=${decision.extracted?.team_name}`);
   const overrideReply = await applyDecision({ decision, groupId, userId, userName, sessionId });
 
   // If this is a brand-new person, only skip the onboarding prompt when
