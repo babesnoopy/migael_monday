@@ -1254,7 +1254,18 @@ app.get('/debug/all-users', (req, res) => {
   res.json(db.all('SELECT id, display_name FROM users'));
 });
 app.get('/debug/groups', (req, res) => {
-  res.json(db.all('SELECT * FROM line_groups ORDER BY created_at DESC'));
+  const groups = db.all('SELECT * FROM line_groups ORDER BY created_at DESC');
+  // group_name is always null (never populated anywhere) — show member
+  // names instead so groups are actually distinguishable from this
+  // endpoint, e.g. to tell a small test group apart from the real one.
+  const withMembers = groups.map((g) => ({
+    ...g,
+    members: db.all(
+      `SELECT u.display_name FROM group_members gm JOIN users u ON gm.user_id = u.id WHERE gm.group_id = ?`,
+      [g.id]
+    ).map((m) => m.display_name),
+  }));
+  res.json(withMembers);
 });
 
 app.post('/webhook', line.middleware(lineConfig), (req, res) => {
