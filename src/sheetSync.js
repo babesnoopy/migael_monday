@@ -76,14 +76,35 @@ function resolveTeamId(categoryName) {
 // there's no real userId behind it. If that same person later
 // introduces themselves in chat, onboarding matches by display_name and
 // reuses this same row rather than creating a duplicate.
+//
+// Sheet names often don't match the name someone actually uses in LINE
+// chat (different spelling/case, or an entirely different nickname) —
+// e.g. the sheet's dropdown has "PAT" but chat onboarding recorded
+// "Pat" (different case = different row without this), or "KOBORED"
+// in the sheet vs "พี่กบ" in chat (not even close as strings). Since
+// the sheet's dropdown is locked (can't just rename it to match), map
+// known sheet names to the real chat display name here instead — told
+// to us directly by Babe (2026-08-02), not guessed. "UNCR-LAB" is
+// intentionally NOT mapped to a person — it's the sheet's own bucket
+// for team/group work, not an individual.
+const ASSIGNEE_ALIASES = {
+  KOBORED: 'พี่กบ',
+  TUM: 'Tum',
+  PAT: 'Pat',
+  PEARY: 'แพร',
+  NATAVAN: 'พี่มิ้ว',
+  CAN: 'แคน',
+};
+
 function resolveAssigneeId(name) {
   if (!name) return null;
   const clean = name.trim();
   if (!clean) return null;
-  const existing = db.get(`SELECT id FROM users WHERE display_name = ?`, [clean]);
+  const canonical = ASSIGNEE_ALIASES[clean.toUpperCase()] || clean;
+  const existing = db.get(`SELECT id FROM users WHERE display_name = ?`, [canonical]);
   if (existing) return existing.id;
   const id = randomUUID();
-  db.run(`INSERT INTO users (id, display_name) VALUES (?, ?)`, [id, clean]);
+  db.run(`INSERT INTO users (id, display_name) VALUES (?, ?)`, [id, canonical]);
   return id;
 }
 
@@ -159,9 +180,16 @@ async function run() {
         // almost every row. Backfill it here the same way category is
         // backfilled, so tasks imported before this fix get corrected
         // on the very next sync rather than needing a manual reset.
-        if (!existing.assignee_id && assigneeName) {
-          db.run(`UPDATE tasks SET assignee_id = ? WHERE id = ?`, [resolveAssigneeId(assigneeName), existing.id]);
-          assignedCount++;
+        // Always re-resolve (not just backfill-when-null) so tasks that
+        // got wrongly linked to a duplicate pseudo-user before the alias
+        // map existed (e.g. a separate "PAT" row instead of merging with
+        // "Pat") self-correct on the next sync too.
+        if (assigneeName) {
+          const resolvedAssigneeId = resolveAssigneeId(assigneeName);
+          if (existing.assignee_id !== resolvedAssigneeId) {
+            db.run(`UPDATE tasks SET assignee_id = ? WHERE id = ?`, [resolvedAssigneeId, existing.id]);
+            assignedCount++;
+          }
         }
         if (!existing.start_date && startDate) {
           db.run(`UPDATE tasks SET start_date = ? WHERE id = ?`, [startDate, existing.id]);
