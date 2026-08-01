@@ -94,6 +94,7 @@ const ASSIGNEE_ALIASES = {
   PEARY: 'แพร',
   NATAVAN: 'พี่มิ้ว',
   CAN: 'แคน',
+  BABE: 'babe',
 };
 
 function resolveAssigneeId(name) {
