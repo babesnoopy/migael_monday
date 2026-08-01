@@ -60,11 +60,11 @@ function pushRecent(groupId, entry) {
 // of "team" that doesn't break every time a LINE group gets rebuilt.
 function getGroupDataSnapshot(_groupId) {
   const tasks = db.all(
-    `SELECT t.title, t.status, u.display_name as assignee, tm.name as team, t.start_date, t.due_date, t.is_urgent
+    `SELECT t.id, t.title, t.status, u.display_name as assignee, tm.name as team, t.start_date, t.due_date, t.is_urgent
      FROM tasks t
      LEFT JOIN users u ON t.assignee_id = u.id
      LEFT JOIN teams tm ON t.team_id = tm.id
-     WHERE t.status != 'done'
+     WHERE t.status NOT IN ('done', 'cancelled')
      ORDER BY t.due_date`
   );
   const events = db.all(
@@ -512,7 +512,42 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
     return { id, meetLink: created?.meetLink || null };
   }
 
+  // D-Phase 2: mirror a newly created task into the UNFEST'26_CHECKLIST
+  // sheet too — best-effort, same non-blocking pattern as status_update's
+  // sheet writes (Phase 1). Never let a sheet hiccup break task creation
+  // in chat; the DB insert above is what actually matters to the team.
+  // Left blank on purpose: "โครงการ" (project) — nothing in brain.js's
+  // create_task schema currently identifies which real project (UNFEST'26
+  // vs UNCOMMU etc.) a chat-created task belongs to, and guessing wrong
+  // here writes a wrong value into a real team-facing sheet. Per spec,
+  // leaving a genuinely unknown field blank is correct; don't invent one.
+  async function writeNewTaskToSheet({ title, assignee, category, dueDate }) {
+    try {
+      const sheetWrite = require('./sheetWrite');
+      await sheetWrite.appendNewTask({
+        title,
+        assignee: assignee || '',
+        project: '',
+        category: category || '',
+        startDateIso: new Date().toISOString().slice(0, 10),
+        dueDateIso: dueDate || null,
+      });
+    } catch (err) {
+      console.error('[SheetWrite] appendNewTask failed:', err.message);
+    }
+  }
+
   if (decision.intent === 'create_task') {
+    // Guard added to match create_event's existing pattern — without
+    // this, the "ask before creating a vague-titled task" rule in
+    // brain.js (see status_update/create_task clarification notes in
+    // the system prompt) had no actual effect: needs_clarification=true
+    // still resulted in a real DB row + sheet write with the vague
+    // title, because nothing here ever checked the flag. The clarifying
+    // question is already in decision.reply_message; don't create
+    // anything until it's answered.
+    if (decision.needs_clarification) return null;
+
     const id = randomUUID();
     db.run(
       `INSERT INTO tasks (id, title, assignee_id, created_by, due_date, group_id, status, team_id, is_urgent, start_date)
@@ -520,6 +555,7 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
       [id, ex.title || '(untitled)', resolveAssigneeId(ex.assignee), userId, ex.due_date || null, groupId, resolveTeamId(ex.category), ex.is_urgent ? 1 : 0, ex.due_date || null]
     );
     gs.linkSession(sessionId, 'task', id);
+    await writeNewTaskToSheet({ title: ex.title || '(untitled)', assignee: ex.assignee, category: ex.category, dueDate: ex.due_date });
 
     // No specific time was given (start_time only gets set for real
     // events) — still put it on the calendar as an all-day entry on its
@@ -539,6 +575,13 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
   if (decision.intent === 'create_multiple_tasks' && ex.items?.length) {
     // One message containing several tasks (e.g. an agenda dump) — capture
     // every item, don't just grab the first and drop the rest.
+    // Same guard as create_task/create_event: if Claude needs
+    // clarification on this whole batch (e.g. one item's title was too
+    // vague), don't create ANY of them yet — the clarifying question is
+    // already in decision.reply_message. Partial-batch creation would be
+    // confusing (some items exist, some don't, with no clear signal why).
+    if (decision.needs_clarification) return null;
+
     const created = [];
     for (const item of ex.items) {
       // An item with a specific start_time is a scheduled queue item /
@@ -562,6 +605,7 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
            VALUES (?, ?, ?, ?, ?, ?, 'to_do', ?, ?, ?)`,
           [id, item.title || '(untitled)', resolveAssigneeId(item.assignee_name), userId, item.due_date || null, groupId, item.is_urgent ? 1 : 0, resolveTeamId(item.category), item.due_date || null]
         );
+        await writeNewTaskToSheet({ title: item.title || '(untitled)', assignee: item.assignee_name, category: item.category, dueDate: item.due_date });
         if (item.due_date) {
           const { id: eventId } = await createCalendarEvent({
             title: item.title,
@@ -752,8 +796,54 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
     return `ตามที่อัปเดตไปเมื่อวันที่ ${updatedDate} เรื่อง "${topic.title}" ค่ะ:\n${topic.summary}${topic.reference_link ? '\n🔗 ' + topic.reference_link : ''}`;
   }
 
-  // status_update: left for a follow-up pass — v1 wiring intentionally
-  // minimal so it's easy to extend once real usage patterns are clear.
+  // status_update: closes/cancels/reschedules a task the team already
+  // has. Always writes the local DB first (source of truth for the
+  // chat) — the sheet write below is best-effort: if it fails (network
+  // blip, token expiry, sheet structure changed), the DB still reflects
+  // reality and the person gets a normal confirmation. We don't want a
+  // sheet API hiccup to make Migael claim a task didn't close when it
+  // did. Errors are logged, not surfaced as a failure in the chat.
+  if (decision.intent === 'status_update' && ex.task_id) {
+    const taskRow = db.get(`SELECT * FROM tasks WHERE id = ?`, [ex.task_id]);
+    if (!taskRow) {
+      return decision.reply_message || 'หางานนี้ในระบบไม่เจอเลยค่ะ ขอโทษด้วย';
+    }
+
+    const sheetWrite = require('./sheetWrite');
+    let sheetResult = null;
+
+    if (ex.new_status === 'done') {
+      db.run(`UPDATE tasks SET status = 'done', completed_at = CURRENT_TIMESTAMP WHERE id = ?`, [taskRow.id]);
+      try { sheetResult = await sheetWrite.markDone(taskRow.title); }
+      catch (err) { console.error('[SheetWrite] markDone failed:', err.message); }
+    } else if (ex.new_status === 'cancelled') {
+      db.run(`UPDATE tasks SET status = 'cancelled' WHERE id = ?`, [taskRow.id]);
+      try { sheetResult = await sheetWrite.markCancelled(taskRow.title); }
+      catch (err) { console.error('[SheetWrite] markCancelled failed:', err.message); }
+    } else if (ex.new_status === 'in_progress') {
+      db.run(`UPDATE tasks SET status = 'in_progress' WHERE id = ?`, [taskRow.id]);
+      // No sheet write for in_progress in Phase 1 — only done/cancelled/
+      // reschedule were in scope; in_progress is DB-only for now.
+    }
+
+    if (ex.new_due_date) {
+      db.run(`UPDATE tasks SET due_date = ? WHERE id = ?`, [ex.new_due_date, taskRow.id]);
+      try { sheetResult = await sheetWrite.reschedule(taskRow.title, ex.new_due_date); }
+      catch (err) { console.error('[SheetWrite] reschedule failed:', err.message); }
+    }
+
+    if (sheetResult && sheetResult.ok === false && sheetResult.reason === 'not_found_in_sheet') {
+      // Task exists in Migael's DB (e.g. created purely from chat, never
+      // synced to/from the sheet yet) but has no matching row in the
+      // sheet to update — not an error, just nothing to sync. The DB
+      // update above already happened and is what drives replies/
+      // reports, so this is silent by design.
+      console.log(`[SheetWrite] "${taskRow.title}" has no matching sheet row — DB updated, sheet unchanged.`);
+    }
+
+    return decision.reply_message || `อัปเดตให้แล้วค่ะ ✅ ${taskRow.title}`;
+  }
+
   return null;
 }
 
@@ -1138,9 +1228,8 @@ app.get('/topics', (req, res) => {
 app.get('/debug/generate-reports', (req, res) => {
   const reports = require('./reports');
   const txt = reports.generateDailyReport();
-  const csv = reports.generateDailyCsv();
   const base = (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
-  res.json({ txt: `${base}/reports/${txt.filename}`, csv: `${base}/reports/${csv.filename}` });
+  res.json({ txt: `${base}/reports/${txt.filename}` });
 });
 
 app.get('/debug/sync-now', async (req, res) => {

@@ -25,6 +25,11 @@ function getAuthUrl() {
     scope: [
       'https://www.googleapis.com/auth/calendar',
       'https://www.googleapis.com/auth/drive.readonly',
+      // Added so Migael can write status/date updates and new rows back
+      // to the UNFEST'26_CHECKLIST sheet, not just read it. Requires
+      // re-running `npm run setup:oauth` and replacing GOOGLE_REFRESH_TOKEN
+      // in Railway — the old token was only ever consented for read access.
+      'https://www.googleapis.com/auth/spreadsheets',
     ],
     prompt: 'consent',
   });

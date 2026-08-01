@@ -4,7 +4,7 @@ const { randomUUID } = require('crypto');
 
 function getRoster(groupId) {
   return db.all(
-    `SELECT u.display_name as name, t.name as team
+    `SELECT u.id, u.display_name as name, t.name as team
      FROM group_members gm
      JOIN users u ON gm.user_id = u.id
      LEFT JOIN teams t ON u.team_id = t.id

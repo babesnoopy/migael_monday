@@ -93,41 +93,127 @@ const DEPT_EMOJI = {
   'MEETING': '🗓️',
 };
 
-// ---- Morning: what to do today ----
+// Groups a list of task rows by department (using explicit team_name if
+// set, else classify.js's keyword guess). Module-level (not nested
+// inside any function) so both sendEveningRecap's group message AND its
+// personal-summary-to-Babe section can call it regardless of which
+// branches ran first — a nested version previously only got defined
+// when `groupId` was truthy, which crashed the personal summary with
+// "groupByDept is not a function" on any day Migael wasn't yet in a
+// group (confirmed via a minimal repro, not just inferred from reading).
+function groupByDept(items) {
+  const byTeam = {};
+  for (const t of items) {
+    const key = t.team_name || guessDepartment(t.title) || 'อื่นๆ';
+    byTeam[key] = byTeam[key] || [];
+    byTeam[key].push(t);
+  }
+  return byTeam;
+}
+
+// Bangkok "today" as a plain YYYY-MM-DD string, for date-only comparisons
+// against due_date (which may or may not carry a time component).
+function bangkokTodayIso() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
+}
+
+// Header date like "จันทร์ 3 ส.ค." for message headers — short Thai
+// weekday + day + short Thai month, matching the format agreed on for
+// A/B/C message headers (never a bare ISO date).
+function formatThaiHeaderDate() {
+  return new Intl.DateTimeFormat('th-TH', {
+    timeZone: 'Asia/Bangkok', weekday: 'long', day: 'numeric', month: 'short',
+  }).format(new Date());
+}
+
+// Urgency rank for sorting: lower = more urgent. Tasks with no due date
+// rank last (but still above people with zero tasks at all).
+function urgencyRank(dueDateStr, todayIso) {
+  if (!dueDateStr) return 3;
+  const due = String(dueDateStr).slice(0, 10);
+  if (due < todayIso) return 0; // overdue
+  if (due === todayIso) return 1; // due today
+  return 2; // due later
+}
+
+// Relative Thai label for a due date, matching the format agreed on
+// (เลยกำหนด / due วันนี้ / due พรุ่งนี้ / due <short weekday>) — never a
+// raw ISO date, per spec.
+function dueLabel(dueDateStr, todayIso) {
+  if (!dueDateStr) return null;
+  const due = String(dueDateStr).slice(0, 10);
+  if (due < todayIso) return 'เลยกำหนด';
+  if (due === todayIso) return 'due วันนี้';
+  const tomorrow = new Date(todayIso + 'T00:00:00+07:00');
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowIso = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(tomorrow);
+  if (due === tomorrowIso) return 'due พรุ่งนี้';
+  const dueDateObj = new Date(due + 'T00:00:00+07:00');
+  const weekday = new Intl.DateTimeFormat('th-TH', { timeZone: 'Asia/Bangkok', weekday: 'short' }).format(dueDateObj);
+  return `due ${weekday}`;
+}
+
+// ---- Morning: what to do today, grouped by person, sorted by urgency ----
 async function sendMorningBriefing({ force = false } = {}) {
   const groupId = gs.getPrimaryGroupId();
   if (!groupId) return;
 
+  const todayIso = bangkokTodayIso();
+  const roster = gs.getRoster(groupId);
   const tasks = db.all(
-    `SELECT t.title, t.is_urgent, t.status, tm.name as team_name, u.display_name as assignee
+    `SELECT t.id, t.title, t.status, t.due_date, t.is_urgent, u.id as assignee_id, u.display_name as assignee
      FROM tasks t
-     LEFT JOIN teams tm ON t.team_id = tm.id
      LEFT JOIN users u ON t.assignee_id = u.id
-     WHERE t.status != 'done' AND date(t.start_date) = date('now')`
+     WHERE t.status NOT IN ('done', 'cancelled')
+     ORDER BY t.due_date`
   );
-
-  const byTeam = {};
-  for (const t of tasks) {
-    const key = t.team_name || guessDepartment(t.title) || 'อื่นๆ';
-    byTeam[key] = byTeam[key] || [];
-    const statusTag = t.status === 'in_progress' ? ' (กำลังทำ)' : '';
-    byTeam[key].push(t.title + statusTag + (t.is_urgent ? ' (ด่วน)' : ''));
-  }
-
   const events = db.all(
     `SELECT title, start_time, meeting_link FROM events WHERE date(start_time) = date('now')`
   );
 
-  if (!tasks.length && !events.length && !force) return;
+  if (!tasks.length && !events.length && !roster.length && !force) return;
 
-  let msg = `สวัสดีค่ะทีม ☀️ สรุปสิ่งที่ต้องทำวันนี้\n`;
-  if (!tasks.length && !events.length) {
-    msg += `\n(ยังไม่มีงานหรือนัดที่ต้องเริ่มวันนี้ในระบบนะคะ)`;
+  // Group tasks by assignee. Unassigned tasks get their own bucket at
+  // the very end (not a real person, so never tagged with a question).
+  const byPerson = new Map(); // key: assignee_id or 'unassigned' -> {name, rank, items:[]}
+  for (const r of roster) {
+    byPerson.set(r.id, { name: r.name, rank: 4, items: [] }); // rank 4 = "no task yet", below rank 3
   }
-  for (const [team, items] of Object.entries(byTeam)) {
-    const emoji = DEPT_EMOJI[team] || '📋';
-    msg += `\n${emoji} ${team}\n`;
-    for (const item of items) msg += `- ${item}\n`;
+  const unassigned = [];
+  for (const t of tasks) {
+    const rank = urgencyRank(t.due_date, todayIso);
+    const label = dueLabel(t.due_date, todayIso);
+    const line = t.title + (label ? ` (${label})` : '') + (t.is_urgent ? ' 🔴' : '');
+    if (t.assignee_id && byPerson.has(t.assignee_id)) {
+      const entry = byPerson.get(t.assignee_id);
+      entry.items.push(line);
+      entry.rank = Math.min(entry.rank, rank);
+    } else if (t.assignee_id) {
+      // Assigned to someone not in this group's roster (rare) — still
+      // show them by name rather than dropping the task silently.
+      if (!byPerson.has(t.assignee_id)) byPerson.set(t.assignee_id, { name: t.assignee, rank: 4, items: [] });
+      const entry = byPerson.get(t.assignee_id);
+      entry.items.push(line);
+      entry.rank = Math.min(entry.rank, rank);
+    } else {
+      unassigned.push(line);
+    }
+  }
+
+  const sortedPeople = [...byPerson.values()].sort((a, b) => a.rank - b.rank);
+
+  let msg = `📋 วันนี้สิ่งที่ต้องทำ | ${formatThaiHeaderDate()}\n`;
+  for (const person of sortedPeople) {
+    msg += `\n${person.name}\n`;
+    if (person.items.length) {
+      for (const item of person.items) msg += `- ${item}\n`;
+    } else {
+      msg += `- วันนี้มีอะไรต้องทำมั้ย?\n`;
+    }
+  }
+  if (unassigned.length) {
+    msg += `\nยังไม่ระบุผู้รับผิดชอบ\n`;
+    for (const item of unassigned) msg += `- ${item}\n`;
   }
   if (events.length) {
     msg += `\nมี ${events.length} มีตติ้งวันนี้ 👇\n`;
@@ -135,45 +221,38 @@ async function sendMorningBriefing({ force = false } = {}) {
       msg += `${e.title} – ${e.start_time}\n${e.meeting_link ? '🔗 ' + e.meeting_link : ''}\n`;
     }
   }
+  if (!sortedPeople.length && !unassigned.length && !events.length) {
+    msg += `\n(ยังไม่มีงานหรือคนในระบบเลยนะคะ)`;
+  }
 
   await push(groupId, msg.trim());
 }
 cron.schedule('0 10 * * *', () => sendMorningBriefing(), { timezone: 'Asia/Bangkok' });
 
-// ---- Afternoon check-in: nudge on TODAY's tasks that aren't overdue yet ----
-// This is separate from checkOverdueTasks() below — that one only fires
-// once a task has passed its deadline. This one follows up mid-day on
-// what was listed in the morning broadcast, even if it's not late yet.
+// ---- Check-in (15:00): ask specifically about each person's tasks that
+// are due today or already overdue — merged midday+afternoon slot per
+// spec (was two separate broadcasts; team asked for one at 15:00). ----
 async function sendAfternoonCheckin({ force = false } = {}) {
   const groupId = gs.getPrimaryGroupId();
   if (!groupId) return;
 
-  const notStarted = db.all(
+  const relevant = db.all(
     `SELECT t.title, u.id as assignee_id, u.display_name as assignee FROM tasks t
      LEFT JOIN users u ON t.assignee_id = u.id
-     WHERE t.status = 'to_do' AND date(t.due_date) = date('now')`
+     WHERE t.status NOT IN ('done', 'cancelled') AND date(t.due_date) <= date('now')
+     ORDER BY t.due_date`
   );
-  const inProgress = db.all(
-    `SELECT t.title, u.id as assignee_id, u.display_name as assignee FROM tasks t
-     LEFT JOIN users u ON t.assignee_id = u.id
-     WHERE t.status = 'in_progress' AND date(t.due_date) = date('now')`
-  );
-  if (!notStarted.length && !inProgress.length && !force) return;
+  if (!relevant.length && !force) return;
 
   const mb = createMentionBuilder();
-  mb.add('แวะมาถามความคืบหน้าหน่อยค่ะ 🙂\n');
-  if (!notStarted.length && !inProgress.length) {
+  mb.add(`🔄 เช็คความคืบหน้า | ${formatThaiHeaderDate()} 15:00\n\n`);
+  if (!relevant.length) {
     mb.add('(ยังไม่มีงานที่ครบกำหนดวันนี้ในระบบนะคะ)');
   }
-  for (const t of notStarted) {
-    mb.add(`${t.title} `);
+  for (const t of relevant) {
     if (t.assignee_id) mb.addMention({ id: t.assignee_id, display_name: t.assignee });
-    mb.add(' — เริ่มหรือยังคะ\n');
-  }
-  for (const t of inProgress) {
-    mb.add(`${t.title} `);
-    if (t.assignee_id) mb.addMention({ id: t.assignee_id, display_name: t.assignee });
-    mb.add(' — เสร็จหรือยังคะ\n');
+    else mb.add('(ไม่ระบุผู้รับผิดชอบ)');
+    mb.add(` — ${t.title} ถึงไหนแล้วคะ?\n`);
   }
   await pushMessage(groupId, mb.build());
 }
@@ -231,7 +310,7 @@ async function checkOverdueTasks() {
   const overdue = db.all(
     `SELECT t.*, u.id as assignee_id2, u.display_name as assignee_name FROM tasks t
      LEFT JOIN users u ON t.assignee_id = u.id
-     WHERE t.status != 'done' AND datetime(t.due_date) < datetime('now')`
+     WHERE t.status NOT IN ('done', 'cancelled') AND datetime(t.due_date) < datetime('now')`
   );
 
   // Collect everything due for a reminder right now, then send ONE
@@ -297,12 +376,10 @@ cron.schedule('30 10 * * *', async () => {
 async function sendEveningRecap({ force = false } = {}) {
   const groupId = gs.getPrimaryGroupId();
 
-  // Generate both the .txt overview and a sheet-ready CSV, reuse the
-  // same links everywhere. The CSV is what Babe actually copy-pastes
-  // into the real sheet — the plain checklist .txt was tedious to
-  // transcribe by hand every evening.
+  // Generate Babe's personal summary report (see reports.js — this is
+  // now a short overview, not a raw checklist to copy-paste, since
+  // Migael writes to the sheet herself now).
   let reportUrl = null;
-  let csvUrl = null;
   if (process.env.PUBLIC_BASE_URL) {
     const base = process.env.PUBLIC_BASE_URL.replace(/\/$/, '');
     try {
@@ -311,118 +388,64 @@ async function sendEveningRecap({ force = false } = {}) {
     } catch (err) {
       console.error('[Reports] failed to generate daily report:', err.message);
     }
-    try {
-      const { filename } = reports.generateDailyCsv();
-      csvUrl = `${base}/reports/${filename}`;
-    } catch (err) {
-      console.error('[Reports] failed to generate daily CSV:', err.message);
-    }
   }
 
   if (groupId) {
     const done = db.all(
-      `SELECT t.title, tm.name as team_name FROM tasks t
-       LEFT JOIN teams tm ON t.team_id = tm.id
+      `SELECT t.title, u.display_name as assignee FROM tasks t
+       LEFT JOIN users u ON t.assignee_id = u.id
        WHERE t.status = 'done' AND date(t.completed_at) = date('now')`
     );
     const pending = db.all(
       `SELECT t.title, u.display_name as assignee, tm.name as team_name FROM tasks t
        LEFT JOIN users u ON t.assignee_id = u.id
        LEFT JOIN teams tm ON t.team_id = tm.id
-       WHERE t.status != 'done' AND date(t.due_date) <= date('now')`
-    );
-    const tomorrow = db.all(
-      `SELECT title FROM tasks WHERE date(due_date) = date('now', '+1 day')`
+       WHERE t.status NOT IN ('done', 'cancelled') AND date(t.due_date) <= date('now')`
     );
 
-    // Same "group by department with an emoji header" template used by
-    // the morning briefing and the in-chat status_check answer — this
-    // recap used to be one long comma-separated wall of text instead,
-    // which was the actual complaint (not just data accuracy).
-    function groupByDept(items) {
-      const byTeam = {};
-      for (const t of items) {
-        const key = t.team_name || guessDepartment(t.title) || 'อื่นๆ';
-        byTeam[key] = byTeam[key] || [];
-        byTeam[key].push(t);
-      }
-      return byTeam;
-    }
-
-    if (done.length || pending.length || tomorrow.length || force) {
-      let msg = `สรุปวันนี้ค่ะ 🌙`;
-      if (!done.length && !pending.length && !tomorrow.length) {
-        msg += '\n\n(ยังไม่มีข้อมูลงานในระบบวันนี้ค่ะ)';
+    if (done.length || pending.length || force) {
+      const mb = createMentionBuilder();
+      mb.add(`🌙 สรุปวันนี้ | ${formatThaiHeaderDate()}\n`);
+      if (!done.length && !pending.length) {
+        mb.add('\n(ยังไม่มีข้อมูลงานในระบบวันนี้ค่ะ)');
       }
 
       if (done.length) {
-        msg += `\n\n✅ เสร็จแล้ววันนี้`;
-        const byTeam = groupByDept(done);
-        for (const [team, items] of Object.entries(byTeam)) {
-          const emoji = DEPT_EMOJI[team] || '📋';
-          msg += `\n${emoji} ${team}\n`;
-          for (const item of items) msg += `- ${item.title}\n`;
-        }
+        mb.add(`\n✅ เสร็จแล้ว\n`);
+        for (const t of done) mb.add(`- ${t.title}${t.assignee ? ' (' + t.assignee + ')' : ''}\n`);
       }
 
       if (pending.length) {
-        msg += `\n⬜ ยังค้าง`;
-        const byTeam = groupByDept(pending);
-        for (const [team, items] of Object.entries(byTeam)) {
-          const emoji = DEPT_EMOJI[team] || '📋';
-          msg += `\n${emoji} ${team}\n`;
-          for (const item of items) msg += `- ${item.title}${item.assignee ? ' (' + item.assignee + ')' : ''}\n`;
-        }
+        mb.add(`\n⏳ ยังค้าง\n`);
+        for (const t of pending) mb.add(`- ${t.title}${t.assignee ? ' (' + t.assignee + ')' : ''}\n`);
       }
 
-      if (tomorrow.length) {
-        msg += `\n📅 พรุ่งนี้\n${tomorrow.map((t) => '- ' + t.title).join('\n')}`;
+      // Tag everyone in the group in one line asking about tomorrow —
+      // per spec this replaces the old static "พรุ่งนี้" list (which
+      // just echoed due_date, not an actual prompt for new work) and
+      // avoids repeating the same question once per person (that read
+      // as spammy — see prior discussion).
+      const roster = gs.getRoster(groupId);
+      if (roster.length) {
+        mb.add('\n---\n');
+        for (const r of roster) mb.addMention({ id: r.id, display_name: r.name }).add(' ');
+        mb.add('พรุ่งนี้ใครมีงานอะไรเพิ่มมั้ยคะ บอกมาได้เลยนะคะ 🙏');
       }
 
-      await push(groupId, msg.trim());
+      await pushMessage(groupId, mb.build());
     }
   }
 
-  // Personal summary to Babeb — same grouped-by-department text as the
-  // group message (readable, not a raw pipe-delimited data dump), plus
-  // the CSV file which is the actual sheet-ready deliverable.
-  if (process.env.BABE_USER_ID) {
-    const donePersonal = db.all(
-      `SELECT t.title, tm.name as team_name FROM tasks t
-       LEFT JOIN teams tm ON t.team_id = tm.id
-       WHERE t.status = 'done' AND date(t.completed_at) = date('now')`
-    );
-    const pendingPersonal = db.all(
-      `SELECT t.title, u.display_name as assignee, tm.name as team_name FROM tasks t
-       LEFT JOIN users u ON t.assignee_id = u.id
-       LEFT JOIN teams tm ON t.team_id = tm.id
-       WHERE t.status != 'done'`
-    );
-
-    let msg = `สรุปสำหรับเบ้บค่ะ 🌙`;
-    if (donePersonal.length) {
-      msg += `\n\n✅ เสร็จแล้ววันนี้ (${donePersonal.length})`;
-      for (const [team, items] of Object.entries(groupByDept(donePersonal))) {
-        msg += `\n${DEPT_EMOJI[team] || '📋'} ${team}\n`;
-        for (const item of items) msg += `- ${item.title}\n`;
-      }
-    }
-    if (pendingPersonal.length) {
-      msg += `\n📋 ค้างทั้งหมด (${pendingPersonal.length})`;
-      for (const [team, items] of Object.entries(groupByDept(pendingPersonal))) {
-        msg += `\n${DEPT_EMOJI[team] || '📋'} ${team}\n`;
-        for (const item of items) msg += `- ${item.title}${item.assignee ? ' (' + item.assignee + ')' : ''}\n`;
-      }
-    }
-    await client.pushMessage(process.env.BABE_USER_ID, { type: 'text', text: msg.trim() });
-
-    if (csvUrl) {
-      const reportPageUrl = `${process.env.PUBLIC_BASE_URL.replace(/\/$/, '')}/report?csv=${encodeURIComponent(csvUrl)}`;
-      await client.pushMessage(process.env.BABE_USER_ID, {
-        type: 'text',
-        text: `ดูตารางงานทั้งหมดแบบอ่านง่ายได้ที่นี่ค่ะ 📊 (มีลิงก์ดาวน์โหลด .csv ไว้ก็อปเข้า sheet ในหน้าเดียวกัน)\n${reportPageUrl}`,
-      });
-    }
+  // Personal summary to Babe — per spec, this is now just a link to the
+  // short overview report (see reports.js), sent as a link rather than
+  // pasted inline text (Babe's own choice: "เป็นลิงค์ละกัน จะได้ไม่รก").
+  // No more separate grouped-by-department text dump or CSV — the sheet
+  // itself is the source of truth now that Migael writes to it directly.
+  if (process.env.BABE_USER_ID && reportUrl) {
+    await client.pushMessage(process.env.BABE_USER_ID, {
+      type: 'text',
+      text: `สรุปวันนี้ค่ะ 📊\n${reportUrl}`,
+    });
   }
 }
 cron.schedule('0 22 * * *', () => sendEveningRecap(), { timezone: 'Asia/Bangkok' });

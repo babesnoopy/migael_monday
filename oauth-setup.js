@@ -30,6 +30,10 @@ const oAuth2Client = new google.auth.OAuth2(
 const SCOPES = [
   'https://www.googleapis.com/auth/calendar',
   'https://www.googleapis.com/auth/drive.readonly',
+  // Needed for sheetWrite.js to write task status/date changes and new
+  // rows back to the UNFEST'26_CHECKLIST sheet. Kept in sync with the
+  // same scope list in src/calendar.js's getAuthUrl().
+  'https://www.googleapis.com/auth/spreadsheets',
 ];
 
 app.get('/oauth2callback', async (req, res) => {
