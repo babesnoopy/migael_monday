@@ -79,6 +79,20 @@ function closeSession(sessionId, reason) {
   );
 }
 
+// This Migael instance only ever lives in one real LINE group (the
+// UNFEST team group), so instead of scoping data by group_id everywhere
+// (which broke every time the group got recreated/re-added — a "new"
+// LINE group has a different id even when it's meant to be the same
+// team chat), we just need ONE canonical place to send broadcasts and
+// reminders to. Override with PRIMARY_GROUP_ID in .env if ever needed;
+// otherwise falls back to whichever group Migael most recently joined.
+function getPrimaryGroupId() {
+  if (process.env.PRIMARY_GROUP_ID) return process.env.PRIMARY_GROUP_ID;
+  if (process.env.PERSONAL_RELAY_GROUP_ID) return process.env.PERSONAL_RELAY_GROUP_ID;
+  const row = db.get('SELECT id FROM line_groups ORDER BY created_at DESC LIMIT 1');
+  return row ? row.id : null;
+}
+
 module.exports = {
   getRoster,
   upsertGroup,
@@ -88,4 +102,5 @@ module.exports = {
   getActiveSession,
   linkSession,
   closeSession,
+  getPrimaryGroupId,
 };

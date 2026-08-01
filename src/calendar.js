@@ -97,19 +97,27 @@ async function createEvent({
   description = '',
   attendeeEmails = [],
   createMeetLink = true,
+  allDay = false, // true for a plain task with only a due DATE, no specific time
 }) {
   try {
     const cal = google.calendar({ version: 'v3', auth: getAuth() });
 
-    const resource = {
-      summary: title,
-      description,
-      start: { dateTime: new Date(startTime).toISOString(), timeZone: 'Asia/Bangkok' },
-      end: { dateTime: new Date(endTime || startTime).toISOString(), timeZone: 'Asia/Bangkok' },
-      attendees: attendeeEmails.map((email) => ({ email })),
-    };
+    const resource = { summary: title, description, attendees: attendeeEmails.map((email) => ({ email })) };
 
-    if (createMeetLink) {
+    if (allDay) {
+      // All-day events use date-only fields, and Google's API treats the
+      // end date as exclusive — a same-day event needs end = start + 1.
+      const dateOnly = new Date(startTime).toISOString().slice(0, 10);
+      const nextDay = new Date(startTime);
+      nextDay.setDate(nextDay.getDate() + 1);
+      resource.start = { date: dateOnly };
+      resource.end = { date: nextDay.toISOString().slice(0, 10) };
+    } else {
+      resource.start = { dateTime: new Date(startTime).toISOString(), timeZone: 'Asia/Bangkok' };
+      resource.end = { dateTime: new Date(endTime || startTime).toISOString(), timeZone: 'Asia/Bangkok' };
+    }
+
+    if (createMeetLink && !allDay) {
       resource.conferenceData = {
         createRequest: {
           requestId: `migael-${Date.now()}`,
@@ -121,7 +129,7 @@ async function createEvent({
     const res = await cal.events.insert({
       calendarId,
       resource,
-      conferenceDataVersion: createMeetLink ? 1 : 0,
+      conferenceDataVersion: createMeetLink && !allDay ? 1 : 0,
       sendUpdates: attendeeEmails.length ? 'all' : 'none',
     });
 

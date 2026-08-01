@@ -26,6 +26,46 @@ async function init() {
     db.run(schema);
     persist();
   }
+
+  // Added after the schema was first shipped, so it can't just live in
+  // schema.sql (that only runs once, on a brand-new DB). IF NOT EXISTS
+  // makes this safe to run on every startup against an existing DB too.
+  // Tracks LINE webhookEventId so a redelivered webhook (LINE retries on
+  // any failure/timeout) doesn't get processed twice — this is what
+  // caused duplicate meetings/tasks to be created from a single message
+  // when webhook redelivery kicked in.
+  db.run(`CREATE TABLE IF NOT EXISTS processed_webhook_events (
+    id TEXT PRIMARY KEY,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  // Lets a plain task (due date only, no specific time) also get an
+  // all-day Calendar entry, and remember which Google event that was —
+  // added after tasks already existed in production, so check first
+  // rather than assuming a fresh schema.
+  const taskCols = db.exec(`PRAGMA table_info(tasks)`);
+  const taskColNames = taskCols[0]?.values?.map((row) => row[1]) || [];
+  if (!taskColNames.includes('calendar_event_id')) {
+    db.run(`ALTER TABLE tasks ADD COLUMN calendar_event_id TEXT`);
+  }
+  // The sheet has a separate "วันที่เริ่มต้น" (start date) column from
+  // "กำหนดเสร็จ" (due date) — a task can be worked on well before its
+  // due date. Without start_date, "what should I work on today" and
+  // "what's due tomorrow" were indistinguishable (only due_date existed).
+  if (!taskColNames.includes('start_date')) {
+    db.run(`ALTER TABLE tasks ADD COLUMN start_date DATETIME`);
+  }
+
+  // Topics get a category too — the 6 UNFEST sub-programs (UNFEST,
+  // UNFILM, UNCINEMA, UNLIVE, UNDEMO, UNFOLD) — so the /topics page can
+  // group and filter by which part of the festival something belongs to.
+  const topicCols = db.exec(`PRAGMA table_info(topics)`);
+  const topicColNames = topicCols[0]?.values?.map((row) => row[1]) || [];
+  if (!topicColNames.includes('category')) {
+    db.run(`ALTER TABLE topics ADD COLUMN category TEXT`);
+  }
+  persist();
+
   return db;
 }
 
