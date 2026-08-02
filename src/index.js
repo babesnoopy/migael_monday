@@ -1302,6 +1302,7 @@ db.init().then(async () => {
   require('./fixNatavan').run();
   require('./fixTopics').run();
   require('./fixDuplicateAssignees').run();
+  require('./fixTestDebris').run();
   require('./resetToSheet').run();
   app.listen(PORT, () => console.log(`Migael listening on port ${PORT}`));
 });
