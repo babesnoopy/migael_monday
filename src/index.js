@@ -1253,14 +1253,6 @@ app.get('/debug/roster', (req, res) => {
 app.get('/debug/all-users', (req, res) => {
   res.json(db.all('SELECT id, display_name FROM users'));
 });
-app.get('/debug/active-tasks', (req, res) => {
-  res.json(db.all(
-    `SELECT t.id, t.title, t.assignee_id, u.display_name as assignee, t.status, t.due_date, t.note
-     FROM tasks t LEFT JOIN users u ON t.assignee_id = u.id
-     WHERE t.status NOT IN ('done', 'cancelled')
-     ORDER BY u.display_name, t.title`
-  ));
-});
 app.get('/debug/groups', (req, res) => {
   const groups = db.all('SELECT * FROM line_groups ORDER BY created_at DESC');
   // group_name is always null (never populated anywhere) — show member
