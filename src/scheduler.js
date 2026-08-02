@@ -20,6 +20,36 @@ const reports = require('./reports');
 const { guessDepartment } = require('./classify');
 const gs = require('./groupState');
 const sheetSync = require('./sheetSync');
+const { google } = require('googleapis');
+const { getAuth } = require('./calendar');
+
+// Today's event titles from the UNCOMMU calendar — this whole calendar
+// (not per-event colorId) is what shows up as "orange" in the team's
+// Google Calendar view, confirmed live 2026-08-02: querying UNCOMMU
+// alone for today returned exactly the one orange item visible in the
+// calendar screenshot Babe shared. Best-effort: any failure here (auth,
+// network, calendar not found) just means no line gets added, never
+// blocks the rest of the morning summary from sending.
+async function getTodayUncommuEvents() {
+  try {
+    const cal = db.get(`SELECT id FROM calendars WHERE name = 'UNCOMMU'`);
+    if (!cal) return [];
+    const calendar = google.calendar({ version: 'v3', auth: getAuth() });
+    const now = new Date();
+    const startOfDay = new Date(now); startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(now); endOfDay.setHours(23, 59, 59, 999);
+    const res = await calendar.events.list({
+      calendarId: cal.id,
+      timeMin: startOfDay.toISOString(),
+      timeMax: endOfDay.toISOString(),
+      singleEvents: true,
+    });
+    return (res.data.items || []).map((e) => e.summary).filter(Boolean);
+  } catch (err) {
+    console.error('[Scheduler] getTodayUncommuEvents failed:', err.message);
+    return [];
+  }
+}
 
 const client = new line.Client({
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
@@ -168,12 +198,16 @@ function formatMeetingDateTime(dbDateString) {
 }
 
 // ---- Morning: what to do today, grouped by person, sorted by urgency ----
-async function sendMorningBriefing({ force = false } = {}) {
+// intro/outro let a one-off special announcement wrap the normal content
+// (e.g. "Migael has some new features today...") without needing a
+// separate message template — used for the 2026-08-02 rollout announcement.
+async function sendMorningBriefing({ force = false, intro = null, outro = null } = {}) {
   const groupId = gs.getPrimaryGroupId();
   if (!groupId) return;
 
   const todayIso = bangkokTodayIso();
   const roster = gs.getRoster(groupId);
+  const uncommuEvents = await getTodayUncommuEvents();
   const tasks = db.all(
     `SELECT t.id, t.title, t.status, t.due_date, t.is_urgent, u.id as assignee_id, u.display_name as assignee
      FROM tasks t
@@ -225,7 +259,12 @@ async function sendMorningBriefing({ force = false } = {}) {
 
   const sortedPeople = [...byPerson.values()].sort((a, b) => a.rank - b.rank);
 
-  let msg = `📋 วันนี้สิ่งที่ต้องทำ | ${formatThaiHeaderDate()}\n`;
+  let msg = '';
+  if (intro) msg += `${intro}\n\n`;
+  msg += `📋 วันนี้สิ่งที่ต้องทำ | ${formatThaiHeaderDate()}\n`;
+  if (uncommuEvents.length) {
+    msg += `\nวันนี้เป็นงาน: ${uncommuEvents.join(', ')}\n`;
+  }
   for (const person of sortedPeople) {
     msg += `\n${person.name}\n`;
     if (person.items.length) {
@@ -252,6 +291,7 @@ async function sendMorningBriefing({ force = false } = {}) {
   if (!sortedPeople.length && !unassigned.length && !events.length) {
     msg += `\n(ยังไม่มีงานหรือคนในระบบเลยนะคะ)`;
   }
+  if (outro) msg += `\n\n${outro}`;
 
   await push(groupId, msg.trim());
 }
