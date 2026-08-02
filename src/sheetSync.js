@@ -33,6 +33,13 @@ const COL = { startDate: 0, title: 1, category: 3, assignee: 4, status: 5, isUrg
 
 function mapStatus(rawStatus) {
   const s = (rawStatus || '').trim();
+  // Bug fix (2026-08-02, confirmed live): this never checked for
+  // "ยกเลิก" (cancelled) or "ระงับชั่วคราว" (on hold) at all — every
+  // status other than เสร็จ/กำลังทำ/ตรวจ silently fell through to
+  // 'to_do', so a task cancelled directly in the sheet (e.g. Pat's
+  // "ทำรูป") kept showing up as an active task to do in every summary.
+  if (s.includes('ยกเลิก')) return { status: 'cancelled', completed: false };
+  if (s.includes('ระงับ')) return { status: 'on_hold', completed: false };
   if (s.includes('เสร็จ') && !s.includes('ยังไม่')) return { status: 'done', completed: true };
   if (s.includes('กำลังทำ')) return { status: 'in_progress', completed: false };
   if (s.includes('ตรวจ')) return { status: 'review', completed: false };

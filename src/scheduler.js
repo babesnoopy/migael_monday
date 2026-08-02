@@ -266,12 +266,17 @@ async function sendMorningBriefing({ force = false, intro = null, outro = null }
     msg += `\nวันนี้เป็นงาน: ${uncommuEvents.join(', ')}\n`;
   }
   for (const person of sortedPeople) {
+    if (!person.items.length) continue; // handled together below, not per-person
     msg += `\n${person.name}\n`;
-    if (person.items.length) {
-      for (const item of person.items) msg += `- ${item}\n`;
-    } else {
-      msg += `- วันนี้มีอะไรต้องทำมั้ย?\n`;
-    }
+    for (const item of person.items) msg += `- ${item}\n`;
+  }
+  // People with zero tasks get ONE combined line instead of a repeated
+  // "- วันนี้มีอะไรต้องทำมั้ย?" block per person — confirmed live
+  // (2026-08-02) that repeating the same question under 4 separate name
+  // headers read as spammy/redundant rather than personal.
+  const noTaskNames = sortedPeople.filter((p) => !p.items.length).map((p) => p.name);
+  if (noTaskNames.length) {
+    msg += `\n${noTaskNames.join(', ')} — วันนี้มีอะไรต้องทำมั้ย?\n`;
   }
   if (unassigned.length) {
     msg += `\nยังไม่ระบุผู้รับผิดชอบ\n`;
