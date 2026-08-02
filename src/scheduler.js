@@ -230,26 +230,26 @@ async function sendMorningBriefing({ force = false, intro = null, outro = null }
 
   if (!tasks.length && !events.length && !roster.length && !force) return;
 
-  // Group tasks by assignee. Unassigned tasks get their own bucket at
-  // the very end (not a real person, so never tagged with a question).
-  const byPerson = new Map(); // key: assignee_id or 'unassigned' -> {name, rank, items:[]}
+  // Group tasks by DISPLAY NAME, not raw assignee_id — confirmed live
+  // (2026-08-02) that the same real person can have two different LINE
+  // account ids (see fixDuplicateAssignees.js's file header for the full
+  // story), which would otherwise still show as two separate name
+  // headers here even after that fix keeps both id rows alive. Grouping
+  // by name is robust to that regardless of how many ids end up sharing
+  // it. Unassigned tasks get their own bucket at the very end (not a
+  // real person, so never tagged with a question).
+  const byPerson = new Map(); // key: display name -> {name, rank, items:[]}
   for (const r of roster) {
-    byPerson.set(r.id, { name: r.name, rank: 4, items: [] }); // rank 4 = "no task yet", below rank 3
+    byPerson.set(r.name, { name: r.name, rank: 4, items: [] }); // rank 4 = "no task yet", below rank 3
   }
   const unassigned = [];
   for (const t of tasks) {
     const rank = urgencyRank(t.due_date, todayIso);
     const label = dueLabel(t.due_date, todayIso);
     const line = t.title + (label ? ` (${label})` : '') + (t.is_urgent ? ' 🔴' : '');
-    if (t.assignee_id && byPerson.has(t.assignee_id)) {
-      const entry = byPerson.get(t.assignee_id);
-      entry.items.push(line);
-      entry.rank = Math.min(entry.rank, rank);
-    } else if (t.assignee_id) {
-      // Assigned to someone not in this group's roster (rare) — still
-      // show them by name rather than dropping the task silently.
-      if (!byPerson.has(t.assignee_id)) byPerson.set(t.assignee_id, { name: t.assignee, rank: 4, items: [] });
-      const entry = byPerson.get(t.assignee_id);
+    if (t.assignee) {
+      if (!byPerson.has(t.assignee)) byPerson.set(t.assignee, { name: t.assignee, rank: 4, items: [] });
+      const entry = byPerson.get(t.assignee);
       entry.items.push(line);
       entry.rank = Math.min(entry.rank, rank);
     } else {
