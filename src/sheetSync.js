@@ -109,6 +109,20 @@ function resolveAssigneeId(name) {
   return id;
 }
 
+// Strips Thai tone marks (่ ้ ๊ ๋, U+0E48-U+0E4B) and collapses
+// whitespace before matching a sheet title against existing tasks.
+// Confirmed cause of two separate duplicate-task incidents (2026-08-02):
+// someone lightly editing a title in the sheet — e.g. "เช่๊คอังกริดของ..."
+// -> "เช๊คอังกริดของ..." (one tone mark removed) — made the exact-match
+// title lookup treat it as a brand-new task, leaving the old one
+// orphaned under the old spelling forever. This doesn't fix titles
+// that change more substantially (that's a genuinely different task
+// name and should create a new row), just tolerates minor tone-mark-
+// level edits so re-typing a word doesn't fork the task in two.
+function normalizeTitle(title) {
+  return title.trim().toLowerCase().replace(/[\u0E48-\u0E4B]/g, '').replace(/\s+/g, ' ');
+}
+
 async function findSpreadsheetId() {
   if (process.env.UNFEST_CHECKLIST_SHEET_ID) return process.env.UNFEST_CHECKLIST_SHEET_ID;
   const results = await driveApi.search("UNFEST'26_CHECKLIST");
@@ -134,7 +148,7 @@ async function run() {
     const rows = res.data.values || [];
 
     const existingTasks = new Map(
-      db.all(`SELECT id, title, team_id, assignee_id, start_date, status, note FROM tasks`).map((t) => [t.title.trim().toLowerCase(), t])
+      db.all(`SELECT id, title, team_id, assignee_id, start_date, status, note FROM tasks`).map((t) => [normalizeTitle(t.title), t])
     );
 
     let importedCount = 0;
@@ -148,7 +162,7 @@ async function run() {
 
       const category = row[COL.category]?.trim() || null;
       const assigneeName = row[COL.assignee]?.trim() || null;
-      const key = title.toLowerCase();
+      const key = normalizeTitle(title);
       const existing = existingTasks.get(key);
 
       const startDate = toIsoDate(row[COL.startDate]);

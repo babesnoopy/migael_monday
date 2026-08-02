@@ -92,14 +92,20 @@ function toSheetDate(isoDate) {
 // Finds the sheet row number (1-based, matching the actual sheet grid)
 // for a task by title. Always re-reads fresh — never trust a cached row
 // number, since the team may insert/delete rows directly in the sheet.
+// Title comparison tolerates a tone-mark-level edit (same normalization
+// as sheetSync.js's normalizeTitle) — confirmed real case: "เช่๊คอังกริดของ..."
+// vs "เช๊คอังกริดของ..." would otherwise fail to match here too.
+function normalizeTitle(t) {
+  return (t || '').trim().toLowerCase().replace(/[\u0E48-\u0E4B]/g, '').replace(/\s+/g, ' ');
+}
 async function findRowByTitle(sheets, spreadsheetId, title) {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
     range: `'${SHEET_TAB}'!${COLUMN.title}${FIRST_DATA_ROW}:${COLUMN.title}2000`,
   });
   const rows = res.data.values || [];
-  const key = title.trim().toLowerCase();
-  const idx = rows.findIndex((r) => (r[0] || '').trim().toLowerCase() === key);
+  const key = normalizeTitle(title);
+  const idx = rows.findIndex((r) => normalizeTitle(r[0]) === key);
   if (idx === -1) return null;
   return FIRST_DATA_ROW + idx;
 }
