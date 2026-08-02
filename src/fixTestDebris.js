@@ -22,6 +22,15 @@ const DEBRIS_TITLES = [
 // the older f1599d09... (due_date null, old "เช่๊ค" spelling).
 const DEBRIS_IDS = [
   'f1599d09-6a42-45ba-b6fe-96d0c15463ee',
+  // "Post promote session dome 1 (Post หัวค่ำ)" — confirmed via
+  // /debug/find-task (2026-08-02) this was NOT seed data as first
+  // assumed; note was NULL, created_at 2026-08-01 08:04, i.e. a
+  // chat-created task from early dev testing that predates D-Phase2's
+  // sheet write-back existing — it never made it into the sheet and
+  // has no real-world counterpart there now, so kept showing as an
+  // un-closeable "overdue" item with no way to resolve it from the
+  // sheet side.
+  '7344d053-886a-4a84-85ca-ef6f7c5c749d',
 ];
 
 // Babe's explicit instruction (2026-08-02): task data should come from
@@ -29,9 +38,7 @@ const DEBRIS_IDS = [
 // seed.js import (note='seed:checklist-v1') predates sheetSync.js and
 // is now fully redundant — anything still genuinely in the sheet gets
 // re-imported properly (with correct assignee/status) by sheetSync
-// anyway. Confirmed case: "Post promote session dome 1" was seed-only
-// debris, not present in the current sheet at all, kept showing as
-// perpetually overdue with no way to close it from the sheet side.
+// anyway.
 function removeSeedData() {
   const seedTasks = db.all(`SELECT id FROM tasks WHERE note = 'seed:checklist-v1'`);
   for (const t of seedTasks) db.run(`DELETE FROM tasks WHERE id = ?`, [t.id]);
