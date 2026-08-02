@@ -1253,10 +1253,6 @@ app.get('/debug/roster', (req, res) => {
 app.get('/debug/all-users', (req, res) => {
   res.json(db.all('SELECT id, display_name FROM users'));
 });
-app.get('/debug/find-task', (req, res) => {
-  const q = req.query.q || '';
-  res.json(db.all(`SELECT id, title, assignee_id, status, due_date, note FROM tasks WHERE title LIKE ?`, [`%${q}%`]));
-});
 app.get('/debug/groups', (req, res) => {
   const groups = db.all('SELECT * FROM line_groups ORDER BY created_at DESC');
   // group_name is always null (never populated anywhere) — show member
