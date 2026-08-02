@@ -20,6 +20,21 @@ const reports = require('./reports');
 const { guessDepartment } = require('./classify');
 const gs = require('./groupState');
 const sheetSync = require('./sheetSync');
+const { alertBabe } = require('./alertBabe');
+
+// Wraps a cron job body so an unhandled error inside it alerts Babe
+// personally instead of failing silently — this is what makes the
+// alertBabe.js system actually useful; a job that throws and no one
+// notices is exactly the gap it exists to close.
+function withAlert(kind, fn) {
+  return async () => {
+    try {
+      await fn();
+    } catch (err) {
+      await alertBabe(`Cron job failed: ${kind}`, err);
+    }
+  };
+}
 const { google } = require('googleapis');
 const { getAuth } = require('./calendar');
 
@@ -300,7 +315,7 @@ async function sendMorningBriefing({ force = false, intro = null, outro = null }
 
   await push(groupId, msg.trim());
 }
-cron.schedule('0 10 * * *', () => sendMorningBriefing(), { timezone: 'Asia/Bangkok' });
+cron.schedule('0 10 * * *', withAlert('morning briefing', sendMorningBriefing), { timezone: 'Asia/Bangkok' });
 
 // ---- Check-in (15:00): ask specifically about each person's tasks that
 // are due today or already overdue — merged midday+afternoon slot per
@@ -329,13 +344,13 @@ async function sendAfternoonCheckin({ force = false } = {}) {
   }
   await pushMessage(groupId, mb.build());
 }
-cron.schedule('0 15 * * *', () => sendAfternoonCheckin(), { timezone: 'Asia/Bangkok' });
+cron.schedule('0 15 * * *', withAlert('afternoon checkin', sendAfternoonCheckin), { timezone: 'Asia/Bangkok' });
 
 // ---- Reminder polling: every 5 minutes, check for meetings and overdue tasks ----
-cron.schedule('*/5 * * * *', async () => {
+cron.schedule('*/5 * * * *', withAlert('meeting/overdue polling', async () => {
   await checkMeetingReminders();
   await checkOverdueTasks();
-}, { timezone: 'Asia/Bangkok' });
+}), { timezone: 'Asia/Bangkok' });
 
 async function checkMeetingReminders() {
   const groupId = gs.getPrimaryGroupId();
@@ -428,7 +443,7 @@ async function checkOverdueTasks() {
 // ---- Stale topic nudge: once a day, ping topics nobody's touched in a
 // while, tagging whoever was involved — this is what keeps ideas/specs
 // from silently dying in chat once the conversation moves on. ----
-cron.schedule('30 10 * * *', async () => {
+cron.schedule('30 10 * * *', withAlert('stale topic nudge', async () => {
   const groupId = gs.getPrimaryGroupId();
   if (!groupId) return;
 
@@ -443,7 +458,7 @@ cron.schedule('30 10 * * *', async () => {
     const baseText = `📌 เรื่อง "${t.title}" เงียบไปหลายวันแล้วนะคะ มีอัปเดตอะไรไหมคะ\n${t.summary}${t.reference_link ? '\n🔗 ' + t.reference_link : ''}`;
     await pushWithMentions(groupId, baseText, participants);
   }
-}, { timezone: 'Asia/Bangkok' });
+}, { timezone: 'Asia/Bangkok' }));
 
 // ---- Evening: recap + tomorrow prep ----
 async function sendEveningRecap({ force = false } = {}) {
@@ -521,11 +536,11 @@ async function sendEveningRecap({ force = false } = {}) {
     });
   }
 }
-cron.schedule('0 22 * * *', () => sendEveningRecap(), { timezone: 'Asia/Bangkok' });
+cron.schedule('0 22 * * *', withAlert('evening recap', sendEveningRecap), { timezone: 'Asia/Bangkok' });
 
 // ---- Sheet sync: every 3 minutes, pick up any tasks the team added
 // directly in the UNFEST'26_CHECKLIST sheet instead of through LINE ----
-cron.schedule('*/3 * * * *', () => sheetSync.run(), { timezone: 'Asia/Bangkok' });
+cron.schedule('*/3 * * * *', withAlert('sheet sync', () => sheetSync.run()), { timezone: 'Asia/Bangkok' });
 
 // Also run once at startup so new sheet rows show up without waiting
 // for the first scheduled sync after a deploy.

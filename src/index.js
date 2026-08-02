@@ -1289,7 +1289,10 @@ app.post('/webhook', line.middleware(lineConfig), (req, res) => {
       if (seen) continue; // already handled — skip to avoid duplicate actions
       db.run(`INSERT OR IGNORE INTO processed_webhook_events (id) VALUES (?)`, [dedupeKey]);
     }
-    handleEvent(event).catch((err) => console.error('[webhook] handleEvent error:', err));
+    handleEvent(event).catch((err) => {
+      console.error('[webhook] handleEvent error:', err);
+      require('./alertBabe').alertBabe('webhook message handling failed', err);
+    });
   }
 });
 
