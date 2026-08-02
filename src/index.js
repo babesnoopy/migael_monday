@@ -1297,7 +1297,14 @@ const PORT = process.env.PORT || 3000;
 
 db.init().then(async () => {
   await require('./calendarSeed').run();
-  require('./seed').run();
+  // seed.js (one-time import from seed-tasks.json) removed from boot —
+  // Babe's explicit instruction (2026-08-02): task data comes from the
+  // live sheet only via sheetSync.js, one source, to avoid duplicate/
+  // stale entries like "Post promote session dome 1" that no longer
+  // exist in the sheet but never had a way to close. fixTestDebris.js
+  // already purged the old seed-imported rows this run; leaving the
+  // seed.js call in would just re-import them right back on next boot,
+  // since its own guard checks for a marker row that no longer exists.
   require('./cleanup').run();
   require('./fixNatavan').run();
   require('./fixTopics').run();

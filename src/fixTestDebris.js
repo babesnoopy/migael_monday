@@ -24,6 +24,20 @@ const DEBRIS_IDS = [
   'f1599d09-6a42-45ba-b6fe-96d0c15463ee',
 ];
 
+// Babe's explicit instruction (2026-08-02): task data should come from
+// the sheet only, one source, to avoid confusion. The old one-time
+// seed.js import (note='seed:checklist-v1') predates sheetSync.js and
+// is now fully redundant — anything still genuinely in the sheet gets
+// re-imported properly (with correct assignee/status) by sheetSync
+// anyway. Confirmed case: "Post promote session dome 1" was seed-only
+// debris, not present in the current sheet at all, kept showing as
+// perpetually overdue with no way to close it from the sheet side.
+function removeSeedData() {
+  const seedTasks = db.all(`SELECT id FROM tasks WHERE note = 'seed:checklist-v1'`);
+  for (const t of seedTasks) db.run(`DELETE FROM tasks WHERE id = ?`, [t.id]);
+  return seedTasks.length;
+}
+
 function run() {
   let removed = 0;
   for (const title of DEBRIS_TITLES) {
@@ -40,6 +54,7 @@ function run() {
       removed++;
     }
   }
+  removed += removeSeedData();
   if (removed > 0) {
     console.log(`[fixTestDebris] Removed ${removed} leftover test task(s).`);
   }
