@@ -35,6 +35,15 @@ const ALIASES = {
   BABE: 'babe',
 };
 
+// Known same-person pairs that DON'T share an exact display_name string,
+// so the general by-name pass can't catch them automatically — a LINE
+// profile name ("Kobored") vs the name given during chat onboarding
+// ("พี่กบ") for the same real person's second account. Merge by id
+// directly. staleId -> canonicalId.
+const KNOWN_ID_PAIRS = [
+  ['Ubf336464e8fc6fd5eb6af502b2415243', 'Ubaa5d750b525bd542b16288503216103'], // "Kobored" -> พี่กบ, confirmed 2026-08-02
+];
+
 function mergeUser(staleId, canonicalId) {
   if (staleId === canonicalId) return { mergedTasks: 0 };
   const canonical = db.get(`SELECT display_name, team_id, onboarded_at FROM users WHERE id = ?`, [canonicalId]);
@@ -99,6 +108,11 @@ function run() {
     const canonical = db.get(`SELECT id FROM users WHERE display_name = ?`, [canonicalName]);
     if (!canonical || canonical.id === stale.id) continue;
     const { mergedTasks: mt } = mergeUser(stale.id, canonical.id);
+    mergedTasks += mt;
+  }
+
+  for (const [staleId, canonicalId] of KNOWN_ID_PAIRS) {
+    const { mergedTasks: mt } = mergeUser(staleId, canonicalId);
     mergedTasks += mt;
   }
 
