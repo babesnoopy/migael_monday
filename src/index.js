@@ -1253,18 +1253,6 @@ app.get('/debug/roster', (req, res) => {
 app.get('/debug/all-users', (req, res) => {
   res.json(db.all('SELECT id, display_name FROM users'));
 });
-app.get('/debug/send-special-morning', async (req, res) => {
-  try {
-    await require('./scheduler').sendMorningBriefing({
-      force: true,
-      intro: 'วันนี้มิเกลมีการ develop ฟีเจอร์นิดหน่อยนะคะ 🛠️',
-      outro: 'ถ้ามีงานไหนเพิ่มให้บอกได้เลย ที่สำคัญอย่าลืมเรียกมิเกลน้า',
-    });
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
 app.get('/debug/groups', (req, res) => {
   const groups = db.all('SELECT * FROM line_groups ORDER BY created_at DESC');
   // group_name is always null (never populated anywhere) — show member
