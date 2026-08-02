@@ -238,11 +238,16 @@ async function sendMorningBriefing({ force = false } = {}) {
     msg += `\nยังไม่ระบุผู้รับผิดชอบ\n`;
     for (const item of unassigned) msg += `- ${item}\n`;
   }
+  // Always say something about meetings, even "none today" — leaving
+  // this section out entirely when events.length===0 (old behavior) read
+  // as "did Migael even check?" rather than "confirmed, nothing today".
   if (events.length) {
-    msg += `\nมี ${events.length} มีตติ้งวันนี้ 👇\n`;
+    msg += `\nวันนี้มีมีตติ้ง 👇\n`;
     for (const e of events) {
       msg += `\n${e.title}\n${formatMeetingDateTime(e.start_time)}\n${e.meeting_link ? '🔗 ' + e.meeting_link : ''}\n`;
     }
+  } else {
+    msg += `\nวันนี้ไม่มีมีตติ้งนะคะ`;
   }
   if (!sortedPeople.length && !unassigned.length && !events.length) {
     msg += `\n(ยังไม่มีงานหรือคนในระบบเลยนะคะ)`;
