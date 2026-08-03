@@ -78,8 +78,21 @@ const client = new line.Client({
 });
 
 function push(groupId, text) {
+  if (dryRunMode) { lastDryRunMessage = { type: 'text', text }; return Promise.resolve({ dryRun: true }); }
   return client.pushMessage(groupId, { type: 'text', text });
 }
+
+// Dry-run mode: lets test commands compose the exact message that would
+// be sent WITHOUT actually pushing it to LINE — every real push counts
+// against the account's monthly free-message quota, and burned through
+// it fast during heavy same-day testing (confirmed live 2026-08-03: hit
+// the 300/month cap from testing alone). When enabled, push/pushMessage
+// capture the message instead of sending and make it available via
+// getLastDryRunMessage() for a debug endpoint to return.
+let dryRunMode = false;
+let lastDryRunMessage = null;
+function setDryRun(on) { dryRunMode = on; lastDryRunMessage = null; }
+function getLastDryRunMessage() { return lastDryRunMessage; }
 
 // Real LINE mention checked against official docs (2026-08-03): the
 // {index,length,userId} "mention" object on a plain type:'text' message
@@ -128,6 +141,7 @@ function createMentionBuilder() {
 }
 
 function pushMessage(groupId, message) {
+  if (dryRunMode) { lastDryRunMessage = message; return Promise.resolve({ dryRun: true }); }
   return client.pushMessage(groupId, message);
 }
 
@@ -572,10 +586,14 @@ async function sendEveningRecap({ force = false } = {}) {
   // No more separate grouped-by-department text dump or CSV — the sheet
   // itself is the source of truth now that Migael writes to it directly.
   if (process.env.BABE_USER_ID && reportUrl) {
-    await client.pushMessage(process.env.BABE_USER_ID, {
-      type: 'text',
-      text: `สรุปวันนี้ค่ะ 📊\n${reportUrl}`,
-    });
+    if (dryRunMode) {
+      lastDryRunMessage = { ...(lastDryRunMessage ? { groupMessage: lastDryRunMessage } : {}), personalReport: `สรุปวันนี้ค่ะ 📊\n${reportUrl}` };
+    } else {
+      await client.pushMessage(process.env.BABE_USER_ID, {
+        type: 'text',
+        text: `สรุปวันนี้ค่ะ 📊\n${reportUrl}`,
+      });
+    }
   }
 }
 cron.schedule('0 22 * * *', withAlert('evening recap', sendEveningRecap), { timezone: 'Asia/Bangkok' });
@@ -594,4 +612,6 @@ module.exports = {
   sendEveningRecap,
   checkMeetingReminders,
   checkOverdueTasks,
+  setDryRun,
+  getLastDryRunMessage,
 };

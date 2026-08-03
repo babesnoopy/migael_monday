@@ -1285,6 +1285,33 @@ app.get('/debug/roster', (req, res) => {
 app.get('/debug/all-users', (req, res) => {
   res.json(db.all('SELECT id, display_name FROM users'));
 });
+// Preview endpoints — compose the exact broadcast message WITHOUT
+// sending it to LINE (see scheduler.js's dry-run mode). Use these for
+// testing from now on instead of the "ทดสอบ..." chat commands, which
+// send a REAL message and count against the account's monthly free
+// message quota (confirmed live 2026-08-03: burned through 300/month
+// from same-day testing alone).
+app.get('/debug/preview-morning', async (req, res) => {
+  const scheduler = require('./scheduler');
+  scheduler.setDryRun(true);
+  await scheduler.sendMorningBriefing({ force: true });
+  res.json(scheduler.getLastDryRunMessage());
+  scheduler.setDryRun(false);
+});
+app.get('/debug/preview-checkin', async (req, res) => {
+  const scheduler = require('./scheduler');
+  scheduler.setDryRun(true);
+  await scheduler.sendAfternoonCheckin({ force: true });
+  res.json(scheduler.getLastDryRunMessage());
+  scheduler.setDryRun(false);
+});
+app.get('/debug/preview-evening', async (req, res) => {
+  const scheduler = require('./scheduler');
+  scheduler.setDryRun(true);
+  await scheduler.sendEveningRecap({ force: true });
+  res.json(scheduler.getLastDryRunMessage());
+  scheduler.setDryRun(false);
+});
 app.get('/debug/groups', (req, res) => {
   const groups = db.all('SELECT * FROM line_groups ORDER BY created_at DESC');
   // group_name is always null (never populated anywhere) — show member
