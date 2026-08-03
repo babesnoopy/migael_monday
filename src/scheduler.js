@@ -612,7 +612,16 @@ async function sendEveningRecap({ force = false } = {}) {
       // just echoed due_date, not an actual prompt for new work) and
       // avoids repeating the same question once per person (that read
       // as spammy — see prior discussion).
-      const roster = gs.getRoster(groupId);
+      // Dedupe by display_name — a person can have two different LINE
+      // account ids in the roster (see fixDuplicateAssignees.js's file
+      // header) which would otherwise tag the same person twice here.
+      const rosterRaw = gs.getRoster(groupId);
+      const seenNames = new Set();
+      const roster = rosterRaw.filter((r) => {
+        if (seenNames.has(r.name)) return false;
+        seenNames.add(r.name);
+        return true;
+      });
       if (roster.length) {
         mb.add('\n---\n');
         for (const r of roster) mb.addMention({ id: r.id, display_name: r.name }).add(' ');
