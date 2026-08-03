@@ -655,6 +655,28 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
     });
     gs.linkSession(sessionId, 'event', id);
 
+    // BUG FIX (2026-08-03, confirmed live): a "คิว"/reminder item
+    // (is_meeting=false — e.g. "ลงคิวเตือนแพทกับโอ๊คเรื่อง X") was only
+    // ever written to the Calendar/events table, never to the tasks
+    // table or the sheet. That meant it never showed up in the morning
+    // summary, never showed in the sheet the team actually watches, and
+    // status_update could never find it later ("หา task ไม่เจอ") — it
+    // only existed as a calendar entry nobody but Migael ever checks.
+    // Mirror it into a real task too, assigned to whoever it's for, so
+    // it's tracked the same way as everything else. Real meetings
+    // (is_meeting=true) are deliberately excluded — those stay calendar-
+    // only, shown via the "มีตติ้งวันนี้" section instead of as a task.
+    if (!isMeeting && ex.title) {
+      const assigneeName = ex.attendee_names?.[0] || null;
+      const taskId = randomUUID();
+      db.run(
+        `INSERT INTO tasks (id, title, assignee_id, created_by, due_date, group_id, status, is_urgent, start_date)
+         VALUES (?, ?, ?, ?, ?, ?, 'to_do', ?, ?)`,
+        [taskId, ex.title, resolveAssigneeId(assigneeName), userId, ex.start_time, groupId, ex.is_urgent ? 1 : 0, ex.start_time]
+      );
+      await writeNewTaskToSheet({ title: ex.title, assignee: assigneeName, category: ex.category, dueDate: ex.start_time });
+    }
+
     if (isMeeting && meetLink) {
       return `${decision.reply_message}\n🔗 ${meetLink}`;
     }
