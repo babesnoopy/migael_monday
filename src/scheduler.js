@@ -566,14 +566,45 @@ async function sendEveningRecap({ force = false } = {}) {
         mb.add('\n(ยังไม่มีข้อมูลงานในระบบวันนี้ค่ะ)');
       }
 
+      // Group by person (matches the morning summary's format) instead
+      // of a flat list with "(name)" tacked on the end of each line —
+      // confirmed live (2026-08-03) that made it hard for someone to
+      // scan for just their own items.
+      function groupByAssignee(items) {
+        const byPerson = new Map();
+        const noName = [];
+        for (const t of items) {
+          if (!t.assignee) { noName.push(t.title); continue; }
+          if (!byPerson.has(t.assignee)) byPerson.set(t.assignee, []);
+          byPerson.get(t.assignee).push(t.title);
+        }
+        return { byPerson, noName };
+      }
+
       if (done.length) {
         mb.add(`\n✅ เสร็จแล้ว\n`);
-        for (const t of done) mb.add(`- ${t.title}${t.assignee ? ' (' + t.assignee + ')' : ''}\n`);
+        const { byPerson, noName } = groupByAssignee(done);
+        for (const [name, titles] of byPerson.entries()) {
+          mb.add(`\n${name}\n`);
+          for (const title of titles) mb.add(`- ${title}\n`);
+        }
+        if (noName.length) {
+          mb.add(`\nยังไม่ระบุผู้รับผิดชอบ\n`);
+          for (const title of noName) mb.add(`- ${title}\n`);
+        }
       }
 
       if (pending.length) {
         mb.add(`\n⏳ ยังค้าง\n`);
-        for (const t of pending) mb.add(`- ${t.title}${t.assignee ? ' (' + t.assignee + ')' : ''}\n`);
+        const { byPerson, noName } = groupByAssignee(pending);
+        for (const [name, titles] of byPerson.entries()) {
+          mb.add(`\n${name}\n`);
+          for (const title of titles) mb.add(`- ${title}\n`);
+        }
+        if (noName.length) {
+          mb.add(`\nยังไม่ระบุผู้รับผิดชอบ\n`);
+          for (const title of noName) mb.add(`- ${title}\n`);
+        }
       }
 
       // Tag everyone in the group in one line asking about tomorrow —
