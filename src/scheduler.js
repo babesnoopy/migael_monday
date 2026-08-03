@@ -463,6 +463,14 @@ async function checkOverdueTasks() {
   const groupId = gs.getPrimaryGroupId();
   if (!groupId) return;
 
+  // Quiet hours: overdue-task nagging is never time-sensitive to a
+  // specific moment (unlike a meeting reminder, which must fire at the
+  // actual meeting time) — it can always wait until a reasonable hour.
+  // Confirmed live (2026-08-03 → 04): this fired at 02:05 Bangkok, which
+  // is clearly not an acceptable time to be pinging the team.
+  const hourBangkok = Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Bangkok', hour: '2-digit', hour12: false }).format(new Date()));
+  if (hourBangkok < 9 || hourBangkok >= 22) return;
+
   const overdue = db.all(
     `SELECT t.*, u.id as assignee_id2, u.display_name as assignee_name FROM tasks t
      LEFT JOIN users u ON t.assignee_id = u.id
