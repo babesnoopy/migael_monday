@@ -195,16 +195,17 @@ async function findNextEmptyRow(sheets, spreadsheetId) {
 // Writes to an explicit row found via findNextEmptyRow (see above) rather
 // than the append() API, and only ever fills columns L-V — nothing to
 // the right, so the formula columns are never touched.
-async function appendNewTask({ title, assignee, project, category, startDateIso, dueDateIso }) {
+async function appendNewTask({ title, assignee, project, category, startDateIso, dueDateIso, status }) {
   const { sheets, spreadsheetId } = await getSheetsClient();
   const row = await findNextEmptyRow(sheets, spreadsheetId);
+  const sheetStatus = status === 'done' ? STATUS.DONE : status === 'cancelled' ? STATUS.CANCELLED : STATUS.TODO;
   const values = [[
     toSheetDate(startDateIso),
     title,
     project || '',
     category || '',
     assignee || '',
-    STATUS.TODO,
+    sheetStatus,
     '', '', '', '', // priority / important? / urgent? / difficulty — left blank, not guessed
     dueDateIso ? toSheetDate(dueDateIso) : '',
   ]];

@@ -75,15 +75,25 @@ function push(groupId, text) {
   return client.pushMessage(groupId, { type: 'text', text });
 }
 
-// Real LINE mentions (not just "@name" text) require the Messaging API's
-// mention object — a list of {index, length, userId} pointing at exact
-// character ranges in the text. Plain "@name" text does NOT notify or
-// highlight anyone; this builder is what actually pings the tagged person,
-// and supports tags anywhere in the message (start, middle, or end),
-// not just appended at the very end.
+// Real LINE mention checked against official docs (2026-08-03): the
+// {index,length,userId} "mention" object on a plain type:'text' message
+// is the format LINE sends TO the bot describing a mention a HUMAN typed
+// — it is NOT a valid way for the bot to SEND a real mention. Confirmed
+// this was the actual bug behind "mentions never worked" (team only
+// ever saw literal "@name" text, no tag, no notification). The correct
+// outbound format is "Text message (v2)": type 'textV2' with {placeholder}
+// tokens in the text and a matching `substitution` map. LINE also
+// requires every mentioned userId to be a real member of the group the
+// message is sent to — a pseudo-user id (UUID format, from sheet-only
+// names like แพร/OAK who've never chatted) is not a real LINE account
+// and would break the mention, so those silently fall back to plain
+// name text instead of a broken/rejected mention attempt.
+const REAL_LINE_ID = /^U[0-9a-f]{32}$/i;
+
 function createMentionBuilder() {
   let text = '';
-  const mentionees = [];
+  const substitution = {};
+  let n = 0;
   return {
     add(str) {
       text += str;
@@ -91,14 +101,21 @@ function createMentionBuilder() {
     },
     addMention(user) {
       if (!user?.id) return this;
-      const tag = `@${user.display_name}`;
-      mentionees.push({ index: text.length, length: tag.length, type: 'user', userId: user.id });
-      text += tag;
+      if (!REAL_LINE_ID.test(user.id)) {
+        // Not a real LINE account (sheet-only pseudo-user) — can't be
+        // mentioned at all; show the plain name so the message still
+        // reads correctly instead of silently dropping the reference.
+        text += user.display_name || '';
+        return this;
+      }
+      const key = `m${n++}`;
+      substitution[key] = { type: 'mention', mentionee: { type: 'user', userId: user.id } };
+      text += `{${key}}`;
       return this;
     },
     build() {
-      return mentionees.length
-        ? { type: 'text', text, mention: { mentionees } }
+      return Object.keys(substitution).length
+        ? { type: 'textV2', text, substitution }
         : { type: 'text', text };
     },
   };
@@ -332,15 +349,34 @@ async function sendAfternoonCheckin({ force = false } = {}) {
   );
   if (!relevant.length && !force) return;
 
-  const mb = createMentionBuilder();
-  mb.add(`🔄 เช็คความคืบหน้า | ${formatThaiHeaderDate()} 15:00\n\n`);
-  if (!relevant.length) {
-    mb.add('(ยังไม่มีงานที่ครบกำหนดวันนี้ในระบบนะคะ)');
-  }
+  // Group by person — one mention + one combined list, not a repeated
+  // "@person — task ถึงไหนแล้วคะ?" line per task. Confirmed live
+  // (2026-08-03): the team doesn't read a wall of near-identical lines,
+  // it reads as spammy/confusing rather than personal.
+  const byPerson = new Map(); // display name -> {user, items:[]}
+  const unassigned = [];
   for (const t of relevant) {
-    if (t.assignee_id) mb.addMention({ id: t.assignee_id, display_name: t.assignee });
-    else mb.add('(ไม่ระบุผู้รับผิดชอบ)');
-    mb.add(` — ${t.title} ถึงไหนแล้วคะ?\n`);
+    if (t.assignee_id) {
+      if (!byPerson.has(t.assignee)) byPerson.set(t.assignee, { user: { id: t.assignee_id, display_name: t.assignee }, items: [] });
+      byPerson.get(t.assignee).items.push(t.title);
+    } else {
+      unassigned.push(t.title);
+    }
+  }
+
+  const mb = createMentionBuilder();
+  mb.add(`🔄 เช็คความคืบหน้า | ${formatThaiHeaderDate()} 15:00\n`);
+  if (!relevant.length) {
+    mb.add('\n(ยังไม่มีงานที่ครบกำหนดวันนี้ในระบบนะคะ)');
+  }
+  for (const { user, items } of byPerson.values()) {
+    mb.add('\n').addMention(user).add(` มีงาน:\n`);
+    for (const title of items) mb.add(`- ${title}\n`);
+    mb.add(`ถึงไหนแล้วบ้างคะ?\n`);
+  }
+  if (unassigned.length) {
+    mb.add(`\nยังไม่ระบุผู้รับผิดชอบ:\n`);
+    for (const title of unassigned) mb.add(`- ${title}\n`);
   }
   await pushMessage(groupId, mb.build());
 }

@@ -68,8 +68,8 @@ function getGroupDataSnapshot(_groupId) {
      ORDER BY t.due_date`
   );
   const events = db.all(
-    `SELECT title, start_time, meeting_link FROM events
-     WHERE datetime(start_time) >= datetime('now', '-1 hour')
+    `SELECT id, title, start_time, meeting_link FROM events
+     WHERE datetime(start_time) >= datetime('now', '+7 hours', '-1 hour')
      ORDER BY start_time LIMIT 10`
   );
   const topics = db.all(
@@ -481,7 +481,7 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
     'ติดต่อ / ติดตาม': 'UNCRLAB',
   };
 
-  async function createCalendarEvent({ title, startTime, endTime, calendarName, isMeeting, attendeeEmails, attendeeNames, allDay }) {
+  async function createCalendarEvent({ title, startTime, endTime, calendarName, isMeeting, isOnsite, attendeeEmails, attendeeNames, allDay }) {
     const mappedName = CATEGORY_TO_CALENDAR[calendarName] || calendarName;
     let calendarRow = null;
     if (mappedName) {
@@ -498,7 +498,7 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
       startTime,
       endTime: endTime || startTime,
       attendeeEmails: attendeeEmails || [],
-      createMeetLink: !!isMeeting,
+      createMeetLink: !!isMeeting && !isOnsite, // onsite meetings get no video link — nobody uses it
       allDay: !!allDay,
     });
 
@@ -521,7 +521,7 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
   // vs UNCOMMU etc.) a chat-created task belongs to, and guessing wrong
   // here writes a wrong value into a real team-facing sheet. Per spec,
   // leaving a genuinely unknown field blank is correct; don't invent one.
-  async function writeNewTaskToSheet({ title, assignee, category, dueDate }) {
+  async function writeNewTaskToSheet({ title, assignee, category, dueDate, status }) {
     try {
       const sheetWrite = require('./sheetWrite');
       await sheetWrite.appendNewTask({
@@ -531,6 +531,7 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
         category: category || '',
         startDateIso: new Date().toISOString().slice(0, 10),
         dueDateIso: dueDate || null,
+        status,
       });
     } catch (err) {
       console.error('[SheetWrite] appendNewTask failed:', err.message);
@@ -549,13 +550,19 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
     if (decision.needs_clarification) return null;
 
     const id = randomUUID();
+    // Supports being created already-closed (initial_status), for
+    // messages that describe something already done/cancelled that was
+    // never tracked as a task before (e.g. "note พรุ่งนี้ไม่มี X แล้วนะคะ")
+    // — without this, that information had nowhere to go and just
+    // vanished even though Migael's reply sounded like it was recorded.
+    const initialStatus = ex.initial_status === 'done' ? 'done' : ex.initial_status === 'cancelled' ? 'cancelled' : 'to_do';
     db.run(
-      `INSERT INTO tasks (id, title, assignee_id, created_by, due_date, group_id, status, team_id, is_urgent, start_date)
-       VALUES (?, ?, ?, ?, ?, ?, 'to_do', ?, ?, ?)`,
-      [id, ex.title || '(untitled)', resolveAssigneeId(ex.assignee), userId, ex.due_date || null, groupId, resolveTeamId(ex.category), ex.is_urgent ? 1 : 0, ex.due_date || null]
+      `INSERT INTO tasks (id, title, assignee_id, created_by, due_date, group_id, status, team_id, is_urgent, start_date, completed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, ex.title || '(untitled)', resolveAssigneeId(ex.assignee), userId, ex.due_date || null, groupId, initialStatus, resolveTeamId(ex.category), ex.is_urgent ? 1 : 0, ex.due_date || null, initialStatus === 'done' ? new Date().toISOString() : null]
     );
     gs.linkSession(sessionId, 'task', id);
-    await writeNewTaskToSheet({ title: ex.title || '(untitled)', assignee: ex.assignee, category: ex.category, dueDate: ex.due_date });
+    await writeNewTaskToSheet({ title: ex.title || '(untitled)', assignee: ex.assignee, category: ex.category, dueDate: ex.due_date, status: initialStatus });
 
     // No specific time was given (start_time only gets set for real
     // events) — still put it on the calendar as an all-day entry on its
@@ -595,6 +602,7 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
           endTime: item.end_time,
           calendarName: item.calendar_name,
           isMeeting: item.is_meeting === true,
+          isOnsite: item.is_onsite === true,
           attendeeEmails: item.attendee_emails,
           attendeeNames: item.attendee_names,
         });
@@ -634,12 +642,14 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
     }
 
     const isMeeting = ex.is_meeting === true;
+    const isOnsite = ex.is_onsite === true;
     const { meetLink, id } = await createCalendarEvent({
       title: ex.title,
       startTime: ex.start_time,
       endTime: ex.end_time,
       calendarName: ex.calendar_name,
       isMeeting,
+      isOnsite,
       attendeeEmails: ex.attendee_emails,
       attendeeNames: ex.attendee_names,
     });
