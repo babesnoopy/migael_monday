@@ -1288,6 +1288,12 @@ app.get('/debug/all-users', (req, res) => {
 app.get('/debug/events-raw', (req, res) => {
   res.json(db.all(`SELECT id, title, start_time, calendar_id, google_event_id FROM events ORDER BY start_time DESC LIMIT 20`));
 });
+app.get('/debug/fix-meeting-mess', (req, res) => {
+  db.run(`UPDATE events SET start_time = ? WHERE id = ?`, ['2026-08-03T21:30:00+07:00', 'e58ee891-f464-4faa-8615-e18ce96179ce']);
+  db.run(`DELETE FROM events WHERE id = ?`, ['9ab250df-199a-45b5-ad17-bb2f4be39475']);
+  db.run(`DELETE FROM events WHERE id = ?`, ['9488900b-c05c-4ad4-b4c1-f03bc3b2e590']);
+  res.json({ ok: true });
+});
 app.get('/debug/groups', (req, res) => {
   const groups = db.all('SELECT * FROM line_groups ORDER BY created_at DESC');
   // group_name is always null (never populated anywhere) — show member
