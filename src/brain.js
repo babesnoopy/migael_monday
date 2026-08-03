@@ -217,8 +217,18 @@ ${ctx.openThread ? `หมายเหตุ: กำลังอยู่ใน�
   try {
     return JSON.parse(clean);
   } catch (err) {
+    // Defense-in-depth: even with max_tokens raised (see 2026-08-03 fix
+    // history above this file), an unusually long/complex message could
+    // still theoretically truncate the response. The old fallback here
+    // returned an EMPTY reply_message — meaning the sender got total
+    // silence with zero signal anything went wrong, and the message's
+    // content (a real schedule update, once) was just lost. Alert Babe
+    // directly so a silent-failure incident like that can't recur
+    // invisibly, and at least acknowledge to the group that something
+    // needs to be re-sent instead of going quiet.
     console.error('Failed to parse Claude response as JSON:', text);
-    return { intent: 'none', reply_message: '' };
+    require('./alertBabe').alertBabe('brain.js JSON parse failure — a message may have been silently dropped', err).catch(() => {});
+    return { intent: 'none', reply_message: 'ขอโทษด้วยค่ะ ข้อความนี้ยาว/ซับซ้อนเกินไปหน่อย มิเกลประมวลผลไม่สำเร็จ รบกวนลองพิมพ์แยกเป็นข้อความสั้นๆ หรือส่งใหม่อีกทีได้ไหมคะ 🙏' };
   }
 }
 
