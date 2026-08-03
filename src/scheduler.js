@@ -412,32 +412,44 @@ async function checkMeetingReminders() {
   const groupId = gs.getPrimaryGroupId();
   if (!groupId) return;
 
-  // Events starting in ~30 or ~10 minutes that haven't been reminded yet
+  // Events starting in ~30 or ~10 minutes that haven't been reminded yet.
+  // Batched into ONE message per window instead of one push per event —
+  // confirmed live (2026-08-03) that two events in the same window sent
+  // as two separate messages read as spammy and wastes the LINE OA's
+  // monthly free-message quota for no real benefit.
   for (const window of [30, 10]) {
     const events = db.all(
       `SELECT * FROM events
        WHERE datetime(start_time) BETWEEN datetime('now', '+${window - 2} minutes')
                                        AND datetime('now', '+${window + 2} minutes')`
     );
-    for (const e of events) {
-      const already = db.get(
-        `SELECT id FROM reminders WHERE ref_type='event' AND ref_id=? AND reminder_type=?`,
-        [e.id, `pre_${window}min`]
-      );
-      if (already) continue;
 
+    const toRemind = events.filter((e) => !db.get(
+      `SELECT id FROM reminders WHERE ref_type='event' AND ref_id=? AND reminder_type=?`,
+      [e.id, `pre_${window}min`]
+    ));
+    if (!toRemind.length) continue;
+
+    const mb = createMentionBuilder();
+    mb.add(`⏰ เตือนค่ะ อีก ${window} นาที ถึงเวลาแล้ว:\n`);
+    const allAttendees = new Map();
+    for (const e of toRemind) {
+      const label = e.meeting_link ? 'มีมีตติ้ง —' : '';
+      mb.add(`\n${label} "${e.title}"`.trim() + '\n');
+      if (e.meeting_link) mb.add(`🔗 ${e.meeting_link}\n`);
       const attendees = db.all(
         `SELECT u.id, u.display_name FROM event_attendees ea JOIN users u ON ea.user_id = u.id WHERE ea.event_id = ?`,
         [e.id]
       );
+      for (const a of attendees) allAttendees.set(a.id, a);
+    }
+    if (allAttendees.size) {
+      mb.add('\n');
+      for (const a of allAttendees.values()) mb.addMention(a).add(' ');
+    }
+    await pushMessage(groupId, mb.build());
 
-      // Wording adapts to whether this is a real meeting (has a Meet
-      // link) or a plain timed reminder created via the "เตือน X ตอน Y"
-      // pattern — saying "มีมีตติ้ง" for a non-meeting reminder read oddly.
-      const label = e.meeting_link ? 'มีมีตติ้ง' : 'ถึงเวลาแล้ว —';
-      const baseText = `⏰ เตือนค่ะ อีก ${window} นาที ${label} "${e.title}"\n${e.meeting_link ? '🔗 ' + e.meeting_link : ''}`.trim();
-      await pushWithMentions(groupId, baseText, attendees);
-
+    for (const e of toRemind) {
       db.run(
         `INSERT INTO reminders (id, ref_type, ref_id, reminder_type, scheduled_at, sent_at, group_id)
          VALUES (?, 'event', ?, ?, datetime('now'), datetime('now'), ?)`,
