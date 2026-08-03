@@ -50,9 +50,15 @@ async function getTodayUncommuEvents() {
     const cal = db.get(`SELECT id FROM calendars WHERE name = 'UNCOMMU'`);
     if (!cal) return [];
     const calendar = google.calendar({ version: 'v3', auth: getAuth() });
-    const now = new Date();
-    const startOfDay = new Date(now); startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(now); endOfDay.setHours(23, 59, 59, 999);
+    // Bug fix (2026-08-03): setHours(0,0,0,0) sets hours in the SERVER's
+    // local timezone (Railway runs in UTC), not Bangkok — so the window
+    // was actually ~07:00 Bangkok to ~06:59 Bangkok the NEXT day, bleeding
+    // into tomorrow's all-day events (confirmed live: showed tomorrow's
+    // "RANK - Simmulator" as today's event). Build the window from an
+    // explicit Bangkok midnight instead.
+    const todayIso = bangkokTodayIso();
+    const startOfDay = new Date(`${todayIso}T00:00:00+07:00`);
+    const endOfDay = new Date(`${todayIso}T23:59:59+07:00`);
     const res = await calendar.events.list({
       calendarId: cal.id,
       timeMin: startOfDay.toISOString(),
