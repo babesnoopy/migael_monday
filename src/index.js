@@ -591,30 +591,35 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
 
     const created = [];
     for (const item of ex.items) {
-      // An item with a specific start_time is a scheduled queue item /
-      // mini-meeting — give it a real Calendar event, same as a single
-      // "ลงคิว"/"สร้าง meeting" message would. Otherwise it's a plain
-      // task with just a due date.
-      if (item.start_time) {
+      // Same fix as the single-item create_event path above: only a
+      // REAL meeting (is_meeting=true) gets a Calendar event. A timed
+      // "คิว"/reminder item (is_meeting=false, just has a start_time) is
+      // a task with a due time — no Calendar entry, no 30/10-min-before
+      // alarm, no risk of a duplicate/garbled meeting link going out.
+      if (item.start_time && item.is_meeting === true) {
         await createCalendarEvent({
           title: item.title,
           startTime: item.start_time,
           endTime: item.end_time,
           calendarName: item.calendar_name,
-          isMeeting: item.is_meeting === true,
+          isMeeting: true,
           isOnsite: item.is_onsite === true,
           attendeeEmails: item.attendee_emails,
           attendeeNames: item.attendee_names,
         });
       } else {
         const id = randomUUID();
+        const dueDate = item.start_time || item.due_date || null;
         db.run(
           `INSERT INTO tasks (id, title, assignee_id, created_by, due_date, group_id, status, is_urgent, team_id, start_date)
            VALUES (?, ?, ?, ?, ?, ?, 'to_do', ?, ?, ?)`,
-          [id, item.title || '(untitled)', resolveAssigneeId(item.assignee_name), userId, item.due_date || null, groupId, item.is_urgent ? 1 : 0, resolveTeamId(item.category), item.due_date || null]
+          [id, item.title || '(untitled)', resolveAssigneeId(item.assignee_name), userId, dueDate, groupId, item.is_urgent ? 1 : 0, resolveTeamId(item.category), dueDate]
         );
-        await writeNewTaskToSheet({ title: item.title || '(untitled)', assignee: item.assignee_name, category: item.category, dueDate: item.due_date });
-        if (item.due_date) {
+        await writeNewTaskToSheet({ title: item.title || '(untitled)', assignee: item.assignee_name, category: item.category, dueDate });
+        // Only sync to Calendar as an all-day entry when there's just a
+        // due DATE and no specific time — a timed item (item.start_time)
+        // is deliberately kept task-only per the fix above.
+        if (item.due_date && !item.start_time) {
           const { id: eventId } = await createCalendarEvent({
             title: item.title,
             startTime: item.due_date,
@@ -643,6 +648,36 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
 
     const isMeeting = ex.is_meeting === true;
     const isOnsite = ex.is_onsite === true;
+
+    // MAJOR FIX (2026-08-04, per Babe's explicit request): "คิว"/reminder
+    // items (is_meeting=false — "เตือน X ตอน Y", "ลงคิวเตือนแพทเรื่อง Z")
+    // no longer touch Google Calendar or the events table AT ALL. They
+    // used to get a real Calendar entry too, which caused a cluster of
+    // real problems: (1) they picked up the 30/10-min-before meeting
+    // reminder treatment meant for real meetings, firing standalone
+    // alarms at odd times instead of just showing up in the next
+    // scheduled summary round like a normal task; (2) rescheduling them
+    // routed through correct_event, which kept failing to find the
+    // event; (3) they cluttered the calendar with entries that were
+    // never real meetings, sometimes with duplicate/garbled meeting
+    // links that risk going out to clients. A "คิว" item is just a task
+    // with a due time — it only ever needs the task+sheet row already
+    // written above. Real meetings (is_meeting=true) are unaffected —
+    // those still get a full Calendar event with a Meet link.
+    if (!isMeeting) {
+      if (!ex.title) return decision.reply_message;
+      const assigneeName = ex.attendee_names?.[0] || null;
+      const taskId = randomUUID();
+      db.run(
+        `INSERT INTO tasks (id, title, assignee_id, created_by, due_date, group_id, status, is_urgent, start_date)
+         VALUES (?, ?, ?, ?, ?, ?, 'to_do', ?, ?)`,
+        [taskId, ex.title, resolveAssigneeId(assigneeName), userId, ex.start_time, groupId, ex.is_urgent ? 1 : 0, ex.start_time]
+      );
+      await writeNewTaskToSheet({ title: ex.title, assignee: assigneeName, category: ex.category, dueDate: ex.start_time });
+      gs.linkSession(sessionId, 'task', taskId);
+      return decision.reply_message;
+    }
+
     const { meetLink, id } = await createCalendarEvent({
       title: ex.title,
       startTime: ex.start_time,
@@ -655,33 +690,9 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
     });
     gs.linkSession(sessionId, 'event', id);
 
-    // BUG FIX (2026-08-03, confirmed live): a "คิว"/reminder item
-    // (is_meeting=false — e.g. "ลงคิวเตือนแพทกับโอ๊คเรื่อง X") was only
-    // ever written to the Calendar/events table, never to the tasks
-    // table or the sheet. That meant it never showed up in the morning
-    // summary, never showed in the sheet the team actually watches, and
-    // status_update could never find it later ("หา task ไม่เจอ") — it
-    // only existed as a calendar entry nobody but Migael ever checks.
-    // Mirror it into a real task too, assigned to whoever it's for, so
-    // it's tracked the same way as everything else. Real meetings
-    // (is_meeting=true) are deliberately excluded — those stay calendar-
-    // only, shown via the "มีตติ้งวันนี้" section instead of as a task.
-    if (!isMeeting && ex.title) {
-      const assigneeName = ex.attendee_names?.[0] || null;
-      const taskId = randomUUID();
-      db.run(
-        `INSERT INTO tasks (id, title, assignee_id, created_by, due_date, group_id, status, is_urgent, start_date)
-         VALUES (?, ?, ?, ?, ?, ?, 'to_do', ?, ?)`,
-        [taskId, ex.title, resolveAssigneeId(assigneeName), userId, ex.start_time, groupId, ex.is_urgent ? 1 : 0, ex.start_time]
-      );
-      await writeNewTaskToSheet({ title: ex.title, assignee: assigneeName, category: ex.category, dueDate: ex.start_time });
-    }
-
-    if (isMeeting && meetLink) {
+    if (meetLink) {
       return `${decision.reply_message}\n🔗 ${meetLink}`;
     }
-    // Queue item, not a meeting — decision.reply_message already
-    // confirms it without a link.
     return decision.reply_message;
   }
 
