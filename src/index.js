@@ -1300,6 +1300,10 @@ app.get('/debug/find-event', (req, res) => {
   const q = req.query.q || '';
   res.json(db.all(`SELECT * FROM events WHERE title LIKE ?`, [`%${q}%`]));
 });
+app.get('/debug/delete-event', (req, res) => {
+  db.run(`DELETE FROM events WHERE id = ?`, [req.query.id]);
+  res.json({ ok: true });
+});
 // Preview endpoints — compose the exact broadcast message WITHOUT
 // sending it to LINE (see scheduler.js's dry-run mode). Use these for
 // testing from now on instead of the "ทดสอบ..." chat commands, which
