@@ -113,7 +113,7 @@ ${ctx.openThread ? `หมายเหตุ: กำลังอยู่ใน�
 ถ้า type คือ topic และข้อความล่าสุดคุยเรื่องเดิมต่อ ให้ตอบ intent เป็น "log_topic" พร้อมใส่ extracted.topic_id = "${ctx.openThread.id}" และเขียน topic_summary ใหม่ทั้งหมด (ไม่ต่อท้าย)
 ไม่ต้องสร้างของใหม่ซ้ำในทั้งสองกรณี` : ''}
 
-วิเคราะห์ข้อความนี้และตอบกลับเป็น JSON เท่านั้น ตามโครงสร้าง:
+วิเคราะห์ข้อความนี้และตอบกลับเป็น JSON เท่านั้น ตามโครงสร้าง — **ห้ามเขียนอะไรก่อนหรือหลัง JSON object เด็ดขาด ไม่ว่าจะเป็นคำอธิบาย บทวิเคราะห์ หัวข้อ "**วิเคราะห์:**" หรือข้อความใดๆ ทั้งสิ้น แม้ว่าเคสนั้นจะซับซ้อน/กำกวมแค่ไหนก็ตาม** ต้องเป็น JSON object เดียวล้วนๆ ตั้งแต่ตัวอักษรแรกถึงตัวสุดท้าย (จะห่อด้วย \`\`\`json ก็ได้ แต่ห้ามมีข้อความอื่นนอกโค้ดบล็อกนั้น) — ถ้าอยากอธิบายเหตุผลการตัดสินใจ ให้ใส่สรุปสั้นๆ ไว้ใน field ที่มีอยู่แล้วแทน ไม่ใช่เขียนเพิ่มนอก JSON:
 {
   "intent": "create_task" | "create_event" | "create_multiple_tasks" | "correct_event" | "status_check" | "status_update" | "add_detail_to_open_thread" | "log_topic" | "recap_topic" | "casual_chat" | "onboarding_reply" | "general_qa" | "drive_search" | "none",
   "confidence": "high" | "low",
@@ -214,7 +214,30 @@ ${ctx.openThread ? `หมายเหตุ: กำลังอยู่ใน�
   });
 
   const text = resp.content.find((b) => b.type === 'text')?.text || '{}';
-  const clean = text.replace(/```json|```/g, '').trim();
+  // Bug fix (2026-08-04, confirmed live): Claude sometimes appends a
+  // free-text "**วิเคราะห์:**" explanation AFTER a perfectly valid JSON
+  // block, especially for nuanced participate/casual_chat decisions —
+  // e.g. returned a complete, correct JSON object, then kept writing
+  // several paragraphs of reasoning below it. The old cleanup
+  // (stripping ``` markers) left that trailing prose in place, so
+  // JSON.parse failed with "Unexpected non-whitespace character after
+  // JSON". Fix: extract ONLY the content between the first pair of
+  // triple-backticks (or the whole text if there are none), ignoring
+  // anything before or after — this is robust regardless of how much
+  // extra commentary the model adds around the JSON.
+  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  let clean = (fenceMatch ? fenceMatch[1] : text).trim();
+  // Extra fallback for the same failure mode without code fences at all —
+  // bare JSON followed by trailing prose. Grab from the first "{" to its
+  // matching "}" by brace-depth counting, ignoring anything after.
+  if (!fenceMatch && clean.startsWith('{')) {
+    let depth = 0, endIdx = -1;
+    for (let i = 0; i < clean.length; i++) {
+      if (clean[i] === '{') depth++;
+      else if (clean[i] === '}') { depth--; if (depth === 0) { endIdx = i; break; } }
+    }
+    if (endIdx !== -1) clean = clean.slice(0, endIdx + 1);
+  }
 
   try {
     return JSON.parse(clean);
