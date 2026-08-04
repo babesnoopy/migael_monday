@@ -188,6 +188,17 @@ async function updateEvent(calendarId, googleEventId, updates = {}) {
   }
 }
 
+async function deleteEvent(calendarId, googleEventId) {
+  try {
+    const cal = google.calendar({ version: 'v3', auth: getAuth() });
+    await cal.events.delete({ calendarId, eventId: googleEventId, sendUpdates: 'none' });
+    return true;
+  } catch (err) {
+    console.error('[Calendar] deleteEvent:', err.message);
+    return false;
+  }
+}
+
 module.exports = {
   getAuth,
   getAuthUrl,
@@ -197,4 +208,5 @@ module.exports = {
   getUpcomingEvents,
   createEvent,
   updateEvent,
+  deleteEvent,
 };
