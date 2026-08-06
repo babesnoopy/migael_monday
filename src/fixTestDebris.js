@@ -67,18 +67,36 @@ function normalizeTaskTitle(t) {
   return (t || '').trim().toLowerCase().replace(/[\u0E48-\u0E4B]/g, '').replace(/\s+/g, ' ');
 }
 function dedupeDuplicateTasks() {
-  const tasks = db.all(`SELECT id, title, assignee_id, note, created_at FROM tasks WHERE status NOT IN ('done','cancelled')`);
+  // Group by normalized DISPLAY NAME, not raw assignee_id — confirmed
+  // live (2026-08-06) that one real person (OAK) can have two different
+  // user ids representing them (a real onboarded LINE account + a
+  // sheet-only pseudo-user), both showing the same display_name after
+  // the case-insensitive merge fix, but still different ids — so
+  // grouping by exact assignee_id alone missed these as "different
+  // people" and never merged their duplicate tasks.
+  const tasks = db.all(
+    `SELECT t.id, t.title, t.assignee_id, t.note, t.created_at, u.display_name as assignee_name
+     FROM tasks t LEFT JOIN users u ON t.assignee_id = u.id
+     WHERE t.status NOT IN ('done','cancelled')`
+  );
   const groups = new Map();
   for (const t of tasks) {
-    const key = normalizeTaskTitle(t.title) + '|||' + (t.assignee_id || 'NONE');
+    const nameKey = t.assignee_name ? t.assignee_name.trim().toLowerCase() : 'NONE';
+    const key = normalizeTaskTitle(t.title) + '|||' + nameKey;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(t);
   }
   let removed = 0;
+  const REAL_LINE_ID = /^U[0-9a-f]{32}$/i;
   for (const group of groups.values()) {
     if (group.length < 2) continue;
-    const sheetSyncOnes = group.filter((t) => t.note === 'sheet-sync');
-    const keep = sheetSyncOnes.length ? sheetSyncOnes[sheetSyncOnes.length - 1] : group[0];
+    // Prefer keeping a row whose assignee has a real LINE id (so it can
+    // actually be tagged), then prefer a sheet-sync row among those,
+    // then fall back to the most recently created.
+    const realIdOnes = group.filter((t) => t.assignee_id && REAL_LINE_ID.test(t.assignee_id));
+    const pool = realIdOnes.length ? realIdOnes : group;
+    const sheetSyncOnes = pool.filter((t) => t.note === 'sheet-sync');
+    const keep = sheetSyncOnes.length ? sheetSyncOnes[sheetSyncOnes.length - 1] : pool[pool.length - 1];
     for (const t of group) {
       if (t.id === keep.id) continue;
       db.run(`DELETE FROM tasks WHERE id = ?`, [t.id]);
