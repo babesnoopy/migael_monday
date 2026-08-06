@@ -1346,6 +1346,10 @@ app.get('/debug/roster', (req, res) => {
 app.get('/debug/all-users', (req, res) => {
   res.json(db.all('SELECT id, display_name FROM users'));
 });
+app.get('/debug/run-dedup', (req, res) => {
+  const removed = require('./fixTestDebris').dedupeDuplicateTasks();
+  res.json({ removed });
+});
 // Preview endpoints — compose the exact broadcast message WITHOUT
 // sending it to LINE (see scheduler.js's dry-run mode). Use these for
 // testing from now on instead of the "ทดสอบ..." chat commands, which
