@@ -1345,44 +1345,6 @@ app.get('/debug/roster', (req, res) => {
 app.get('/debug/all-users', (req, res) => {
   res.json(db.all('SELECT id, display_name FROM users'));
 });
-app.get('/debug/list-active-tasks', (req, res) => {
-  res.json(db.all(`SELECT id, title, assignee_id, note, created_at, calendar_event_id FROM tasks WHERE status NOT IN ('done','cancelled') ORDER BY created_at`));
-});
-app.get('/debug/webhook-dedup-check', (req, res) => {
-  const count = db.get(`SELECT COUNT(*) as c FROM processed_webhook_events`)?.c || 0;
-  res.json({ totalDeduped: count });
-});
-app.get('/debug/find-task-full', (req, res) => {
-  const q = req.query.q || '';
-  res.json(db.all(`SELECT id, title, assignee_id, status, due_date, note, created_at, calendar_event_id FROM tasks WHERE title LIKE ? ORDER BY created_at`, [`%${q}%`]));
-});
-app.get('/debug/cleanup-dupes', async (req, res) => {
-  try {
-    const taskIds = (req.query.taskIds || '').split(',').filter(Boolean);
-    const results = [];
-    for (const taskId of taskIds) {
-      const task = db.get(`SELECT * FROM tasks WHERE id = ?`, [taskId]);
-      if (!task) { results.push({ taskId, status: 'task not found' }); continue; }
-      if (task.calendar_event_id) {
-        const ev = db.get(`SELECT * FROM events WHERE id = ?`, [task.calendar_event_id]);
-        if (ev && ev.google_event_id && ev.calendar_id) {
-          try {
-            await calendarApi.deleteEvent(ev.calendar_id, ev.google_event_id);
-            results.push({ taskId, calendarDeleted: true, googleEventId: ev.google_event_id });
-          } catch (e) {
-            results.push({ taskId, calendarDeleteError: e.message });
-          }
-        }
-        db.run(`DELETE FROM events WHERE id = ?`, [task.calendar_event_id]);
-      }
-      db.run(`DELETE FROM tasks WHERE id = ?`, [taskId]);
-      results.push({ taskId, taskDeleted: true });
-    }
-    res.json({ ok: true, results });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
 // Preview endpoints — compose the exact broadcast message WITHOUT
 // sending it to LINE (see scheduler.js's dry-run mode). Use these for
 // testing from now on instead of the "ทดสอบ..." chat commands, which
