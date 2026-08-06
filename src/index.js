@@ -70,7 +70,8 @@ function getGroupDataSnapshot(_groupId) {
   const events = db.all(
     `SELECT id, title, start_time, meeting_link FROM events
      WHERE datetime(start_time) >= datetime('now', '+7 hours', '-1 hour')
-     ORDER BY start_time LIMIT 10`
+     ORDER BY (CASE WHEN strftime('%H:%M:%S', start_time) = '00:00:00' THEN 1 ELSE 0 END) ASC, start_time
+     LIMIT 30`
   );
   const topics = db.all(
     `SELECT id, title, summary, reference_link, updated_at FROM topics
