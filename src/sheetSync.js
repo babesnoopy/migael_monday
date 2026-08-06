@@ -249,6 +249,20 @@ async function run() {
     if (importedCount > 0 || categorizedCount > 0 || assignedCount > 0 || statusSyncedCount > 0) {
       console.log(`[SheetSync] Imported ${importedCount} new task(s), backfilled category on ${categorizedCount}, backfilled assignee on ${assignedCount}, synced status on ${statusSyncedCount} existing task(s).`);
     }
+
+    // Self-heal duplicate task rows after every sync, not just at boot
+    // (see fixTestDebris.js's dedupeDuplicateTasks header) — this
+    // function's own existingTasks Map can only ever hold one entry per
+    // normalized title, so if a duplicate already exists in the DB
+    // (e.g. from before an assignee got merged) this sync can't notice
+    // or clean it up on its own. Confirmed live (2026-08-06): dedup only
+    // running at boot wasn't enough, since this runs again every 3
+    // minutes via cron and could re-surface/recreate the same class of
+    // duplicate before the next deploy.
+    const removedDupes = require('./fixTestDebris').dedupeDuplicateTasks();
+    if (removedDupes > 0) {
+      console.log(`[SheetSync] Cleaned up ${removedDupes} duplicate task row(s) after sync.`);
+    }
   } catch (err) {
     console.error('[SheetSync] Failed:', err.message);
   }
