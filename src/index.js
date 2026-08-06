@@ -1346,25 +1346,6 @@ app.get('/debug/roster', (req, res) => {
 app.get('/debug/all-users', (req, res) => {
   res.json(db.all('SELECT id, display_name FROM users'));
 });
-app.get('/debug/run-dedup', (req, res) => {
-  const removed = require('./fixTestDebris').dedupeDuplicateTasks();
-  res.json({ removed });
-});
-app.get('/debug/raw-compare', (req, res) => {
-  const q = req.query.q || '';
-  const rows = db.all(
-    `SELECT t.id, t.title, t.assignee_id, u.display_name as assignee_name, t.note, t.status
-     FROM tasks t LEFT JOIN users u ON t.assignee_id = u.id
-     WHERE t.title LIKE ? AND t.status NOT IN ('done','cancelled')`,
-    [`%${q}%`]
-  );
-  const out = rows.map(r => ({
-    ...r,
-    titleCodes: [...r.title].map(c => c.codePointAt(0).toString(16)).join(' '),
-    nameCodes: r.assignee_name ? [...r.assignee_name].map(c => c.codePointAt(0).toString(16)).join(' ') : null,
-  }));
-  res.json(out);
-});
 // Preview endpoints — compose the exact broadcast message WITHOUT
 // sending it to LINE (see scheduler.js's dry-run mode). Use these for
 // testing from now on instead of the "ทดสอบ..." chat commands, which
