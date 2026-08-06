@@ -1346,6 +1346,19 @@ app.get('/debug/roster', (req, res) => {
 app.get('/debug/all-users', (req, res) => {
   res.json(db.all('SELECT id, display_name FROM users'));
 });
+app.get('/debug/find-event', (req, res) => {
+  const q = req.query.q || '';
+  res.json(db.all(`SELECT * FROM events WHERE title LIKE ?`, [`%${q}%`]));
+});
+app.get('/debug/delete-event', async (req, res) => {
+  const ev = db.get(`SELECT * FROM events WHERE id = ?`, [req.query.id]);
+  if (!ev) return res.json({ ok: false, error: 'not found' });
+  if (ev.google_event_id && ev.calendar_id) {
+    await calendarApi.deleteEvent(ev.calendar_id, ev.google_event_id);
+  }
+  db.run(`DELETE FROM events WHERE id = ?`, [ev.id]);
+  res.json({ ok: true, deleted: ev });
+});
 // Preview endpoints — compose the exact broadcast message WITHOUT
 // sending it to LINE (see scheduler.js's dry-run mode). Use these for
 // testing from now on instead of the "ทดสอบ..." chat commands, which
