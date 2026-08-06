@@ -79,17 +79,25 @@ function mergeGeneralDuplicateNames() {
   let mergedTasks = 0;
   const groupId = gs.getPrimaryGroupId();
 
-  const byName = new Map();
+  // Group case-insensitively (and trimmed) — confirmed live (2026-08-06)
+  // that "OAK" vs "Oak" (sheet cells with inconsistent capitalization
+  // for the same person) created two separate pseudo-user rows that an
+  // exact-match grouping never caught, since they're technically
+  // different strings. Casing differences like this are always the same
+  // real person, never intentionally distinct.
+  const byName = new Map(); // normalized key -> [{id, display_name}]
   for (const u of db.all(`SELECT id, display_name FROM users`)) {
     if (!u.display_name) continue;
-    if (!byName.has(u.display_name)) byName.set(u.display_name, []);
-    byName.get(u.display_name).push(u.id);
+    const key = u.display_name.trim().toLowerCase();
+    if (!byName.has(key)) byName.set(key, []);
+    byName.get(key).push(u);
   }
 
-  for (const [name, ids] of byName.entries()) {
-    if (ids.length < 2) continue;
-    const groupMember = groupId && ids.find((id) => db.get(`SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?`, [groupId, id]));
-    const keepId = groupMember || ids[0];
+  for (const [key, rows] of byName.entries()) {
+    if (rows.length < 2) continue;
+    const ids = rows.map((r) => r.id);
+    const groupMember = groupId && rows.find((r) => db.get(`SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?`, [groupId, r.id]));
+    const keepId = (groupMember || rows[0]).id;
     for (const id of ids) {
       if (id === keepId) continue;
       const { mergedTasks: mt } = mergeUser(id, keepId);

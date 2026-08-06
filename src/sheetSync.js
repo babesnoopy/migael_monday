@@ -109,7 +109,12 @@ function resolveAssigneeId(name) {
   const clean = name.trim();
   if (!clean) return null;
   const canonical = ASSIGNEE_ALIASES[clean.toUpperCase()] || clean;
-  const existing = db.get(`SELECT id FROM users WHERE display_name = ?`, [canonical]);
+  // Case-insensitive lookup — confirmed live (2026-08-06) that "OAK" vs
+  // "Oak" (inconsistent capitalization across sheet cells for the same
+  // person) created two separate pseudo-user rows on different sync
+  // runs, since the old exact-match lookup treated them as different
+  // people. Casing alone is never a real distinction.
+  const existing = db.get(`SELECT id FROM users WHERE LOWER(display_name) = LOWER(?)`, [canonical]);
   if (existing) return existing.id;
   const id = randomUUID();
   db.run(`INSERT INTO users (id, display_name) VALUES (?, ?)`, [id, canonical]);
