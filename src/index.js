@@ -433,6 +433,30 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
     return user ? user.id : null;
   }
 
+  // Code-level duplicate guard (2026-08-06) — a prompt-only "check the
+  // active task list before creating" rule wasn't reliable enough on
+  // its own: confirmed live that the exact same batch of tasks (same
+  // titles, same assignees) got created 2-3 separate times over the
+  // course of a morning, ~30-40 minutes apart, because the team kept
+  // re-sending semantically identical instructions and Claude didn't
+  // always catch that they matched something already created earlier
+  // that same session. This is a deterministic backstop: same
+  // normalized title + same assignee + still active (not done/
+  // cancelled) = treat as the same task, don't insert a new row.
+  function normalizeTaskTitle(t) {
+    return (t || '').trim().toLowerCase().replace(/[\u0E48-\u0E4B]/g, '').replace(/\s+/g, ' ');
+  }
+  function findDuplicateActiveTask(title, assigneeId) {
+    if (!title) return null;
+    const key = normalizeTaskTitle(title);
+    const candidates = db.all(
+      `SELECT id, title FROM tasks WHERE assignee_id IS ? AND status NOT IN ('done', 'cancelled')`,
+      [assigneeId]
+    );
+    return candidates.find((c) => normalizeTaskTitle(c.title) === key) || null;
+  }
+
+
   // Resolves Claude's whole-sentence category classification (the 13
   // sheet categories — see brain.js's "category" field) to a real
   // team_id, creating the team row on first use. This is what makes
@@ -549,6 +573,12 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
     // anything until it's answered.
     if (decision.needs_clarification) return null;
 
+    const assigneeIdForNewTask = resolveAssigneeId(ex.assignee);
+    const dup = findDuplicateActiveTask(ex.title, assigneeIdForNewTask);
+    if (dup) {
+      return `งานนี้มีอยู่ในระบบแล้วนะคะ (${dup.title}) เลยไม่สร้างซ้ำให้ ถ้าอยากเปลี่ยนอะไรบอกได้เลยค่ะ`;
+    }
+
     const id = randomUUID();
     // Supports being created already-closed (initial_status), for
     // messages that describe something already done/cancelled that was
@@ -559,7 +589,7 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
     db.run(
       `INSERT INTO tasks (id, title, assignee_id, created_by, due_date, group_id, status, team_id, is_urgent, start_date, completed_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, ex.title || '(untitled)', resolveAssigneeId(ex.assignee), userId, ex.due_date || null, groupId, initialStatus, resolveTeamId(ex.category), ex.is_urgent ? 1 : 0, ex.due_date || null, initialStatus === 'done' ? new Date().toISOString() : null]
+      [id, ex.title || '(untitled)', assigneeIdForNewTask, userId, ex.due_date || null, groupId, initialStatus, resolveTeamId(ex.category), ex.is_urgent ? 1 : 0, ex.due_date || null, initialStatus === 'done' ? new Date().toISOString() : null]
     );
     gs.linkSession(sessionId, 'task', id);
     await writeNewTaskToSheet({ title: ex.title || '(untitled)', assignee: ex.assignee, category: ex.category, dueDate: ex.due_date, status: initialStatus });
@@ -608,12 +638,18 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
           attendeeNames: item.attendee_names,
         });
       } else {
+        const itemAssigneeId = resolveAssigneeId(item.assignee_name);
+        const dup = findDuplicateActiveTask(item.title, itemAssigneeId);
+        if (dup) {
+          created.push({ title: item.title, assignee: item.assignee_name, skippedDuplicate: true });
+          continue;
+        }
         const id = randomUUID();
         const dueDate = item.start_time || item.due_date || null;
         db.run(
           `INSERT INTO tasks (id, title, assignee_id, created_by, due_date, group_id, status, is_urgent, team_id, start_date)
            VALUES (?, ?, ?, ?, ?, ?, 'to_do', ?, ?, ?)`,
-          [id, item.title || '(untitled)', resolveAssigneeId(item.assignee_name), userId, dueDate, groupId, item.is_urgent ? 1 : 0, resolveTeamId(item.category), dueDate]
+          [id, item.title || '(untitled)', itemAssigneeId, userId, dueDate, groupId, item.is_urgent ? 1 : 0, resolveTeamId(item.category), dueDate]
         );
         await writeNewTaskToSheet({ title: item.title || '(untitled)', assignee: item.assignee_name, category: item.category, dueDate });
         // Only sync to Calendar as an all-day entry when there's just a
@@ -631,8 +667,16 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
       }
       created.push({ title: item.title, assignee: item.assignee_name });
     }
-    const lines = created.map((c) => `- ${c.title}${c.assignee ? ' (' + c.assignee + ')' : ''}`);
-    return decision.reply_message || `บันทึกให้แล้วค่ะ ${created.length} รายการ 📋\n${lines.join('\n')}`;
+    const newOnes = created.filter((c) => !c.skippedDuplicate);
+    const skipped = created.filter((c) => c.skippedDuplicate);
+    const lines = newOnes.map((c) => `- ${c.title}${c.assignee ? ' (' + c.assignee + ')' : ''}`);
+    let summary = newOnes.length
+      ? `บันทึกให้แล้วค่ะ ${newOnes.length} รายการ 📋\n${lines.join('\n')}`
+      : `ไม่มีรายการใหม่ที่ต้องบันทึกเพิ่มค่ะ (มีอยู่ในระบบแล้วทั้งหมด)`;
+    if (skipped.length) {
+      summary += `\n\n(ข้ามไป ${skipped.length} รายการที่มีอยู่แล้ว: ${skipped.map((s) => s.title).join(', ')})`;
+    }
+    return decision.reply_message || summary;
   }
 
   if (decision.intent === 'create_event') {
@@ -667,11 +711,16 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
     if (!isMeeting) {
       if (!ex.title) return decision.reply_message;
       const assigneeName = ex.attendee_names?.[0] || null;
+      const queueAssigneeId = resolveAssigneeId(assigneeName);
+      const dup = findDuplicateActiveTask(ex.title, queueAssigneeId);
+      if (dup) {
+        return `งานนี้มีอยู่ในระบบแล้วนะคะ (${dup.title}) เลยไม่สร้างซ้ำให้ค่ะ`;
+      }
       const taskId = randomUUID();
       db.run(
         `INSERT INTO tasks (id, title, assignee_id, created_by, due_date, group_id, status, is_urgent, start_date)
          VALUES (?, ?, ?, ?, ?, ?, 'to_do', ?, ?)`,
-        [taskId, ex.title, resolveAssigneeId(assigneeName), userId, ex.start_time, groupId, ex.is_urgent ? 1 : 0, ex.start_time]
+        [taskId, ex.title, queueAssigneeId, userId, ex.start_time, groupId, ex.is_urgent ? 1 : 0, ex.start_time]
       );
       await writeNewTaskToSheet({ title: ex.title, assignee: assigneeName, category: ex.category, dueDate: ex.start_time });
       gs.linkSession(sessionId, 'task', taskId);
