@@ -1345,6 +1345,9 @@ app.get('/debug/roster', (req, res) => {
 app.get('/debug/all-users', (req, res) => {
   res.json(db.all('SELECT id, display_name FROM users'));
 });
+app.get('/debug/list-active-tasks', (req, res) => {
+  res.json(db.all(`SELECT id, title, assignee_id, note, created_at, calendar_event_id FROM tasks WHERE status NOT IN ('done','cancelled') ORDER BY created_at`));
+});
 app.get('/debug/webhook-dedup-check', (req, res) => {
   const count = db.get(`SELECT COUNT(*) as c FROM processed_webhook_events`)?.c || 0;
   res.json({ totalDeduped: count });
