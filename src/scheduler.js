@@ -261,9 +261,10 @@ async function sendMorningBriefing({ force = false, intro = null, outro = null }
   const roster = gs.getRoster(groupId);
   const uncommuEvents = await getTodayUncommuEvents();
   const tasks = db.all(
-    `SELECT t.id, t.title, t.status, t.due_date, t.is_urgent, u.id as assignee_id, u.display_name as assignee
+    `SELECT t.id, t.title, t.status, t.due_date, t.is_urgent, u.id as assignee_id, u.display_name as assignee, tm.name as category
      FROM tasks t
      LEFT JOIN users u ON t.assignee_id = u.id
+     LEFT JOIN teams tm ON t.team_id = tm.id
      WHERE t.status NOT IN ('done', 'cancelled')
      ORDER BY t.due_date`
   );
@@ -282,75 +283,86 @@ async function sendMorningBriefing({ force = false, intro = null, outro = null }
 
   if (!tasks.length && !events.length && !roster.length && !force) return;
 
-  // Group tasks by DISPLAY NAME, not raw assignee_id — confirmed live
-  // (2026-08-02) that the same real person can have two different LINE
-  // account ids (see fixDuplicateAssignees.js's file header for the full
-  // story), which would otherwise still show as two separate name
-  // headers here even after that fix keeps both id rows alive. Grouping
-  // by name is robust to that regardless of how many ids end up sharing
-  // it. Unassigned tasks get their own bucket at the very end (not a
-  // real person, so never tagged with a question).
-  const byPerson = new Map(); // key: display name -> {name, rank, items:[]}
-  for (const r of roster) {
-    byPerson.set(r.name, { name: r.name, rank: 4, items: [] }); // rank 4 = "no task yet", below rank 3
-  }
+  // Group by CATEGORY (team) instead of by person — confirmed live
+  // (2026-08-06) that grouping by person made someone with many tasks
+  // (e.g. 7+) read as an unscannable wall of text nobody actually read,
+  // whereas Babe's own personal 1:1 query to Migael (which naturally
+  // organized the same data by category) was much easier to scan. Each
+  // task line carries a real mention of its assignee inline instead of
+  // plain "(name)" text, per the same request.
+  const CATEGORY_ORDER = ['PRODUCTION', 'CT ONLINE', 'CT OFFLINE', 'DECORATION', 'เอกสาร', 'MEETING', 'ติดต่อ / ติดตาม'];
+  const byCategory = new Map(); // category name -> {rank, items:[{line, mentionUser}]}
   const unassigned = [];
   for (const t of tasks) {
     const rank = urgencyRank(t.due_date, todayIso);
     const label = dueLabel(t.due_date, todayIso);
     const line = t.title + (label ? ` (${label})` : '') + (t.is_urgent ? ' 🔴' : '');
-    if (t.assignee) {
-      if (!byPerson.has(t.assignee)) byPerson.set(t.assignee, { name: t.assignee, rank: 4, items: [] });
-      const entry = byPerson.get(t.assignee);
-      entry.items.push(line);
+    const mentionUser = t.assignee ? { id: t.assignee_id, display_name: t.assignee } : null;
+    const cat = t.category || null;
+    if (cat) {
+      if (!byCategory.has(cat)) byCategory.set(cat, { rank: 4, items: [] });
+      const entry = byCategory.get(cat);
+      entry.items.push({ line, mentionUser });
       entry.rank = Math.min(entry.rank, rank);
     } else {
-      unassigned.push(line);
+      unassigned.push({ line, mentionUser });
     }
   }
+  const sortedCategories = [...byCategory.entries()].sort((a, b) => {
+    const ai = CATEGORY_ORDER.indexOf(a[0]);
+    const bi = CATEGORY_ORDER.indexOf(b[0]);
+    if (ai !== -1 && bi !== -1) return ai - bi;
+    if (ai !== -1) return -1;
+    if (bi !== -1) return 1;
+    return a[1].rank - b[1].rank;
+  });
 
-  const sortedPeople = [...byPerson.values()].sort((a, b) => a.rank - b.rank);
-
-  let msg = '';
-  if (intro) msg += `${intro}\n\n`;
-  msg += `📋 วันนี้สิ่งที่ต้องทำ | ${formatThaiHeaderDate()}\n`;
+  const mb = createMentionBuilder();
+  if (intro) mb.add(`${intro}\n\n`);
+  mb.add(`📋 วันนี้สิ่งที่ต้องทำ | ${formatThaiHeaderDate()}\n`);
   if (uncommuEvents.length) {
-    msg += `\nวันนี้เป็นงาน: ${uncommuEvents.join(', ')}\n`;
+    mb.add(`\nวันนี้เป็นงาน: ${uncommuEvents.join(', ')}\n`);
   }
-  for (const person of sortedPeople) {
-    if (!person.items.length) continue; // handled together below, not per-person
-    msg += `\n${person.name}\n`;
-    for (const item of person.items) msg += `- ${item}\n`;
-  }
-  // People with zero tasks get ONE combined line instead of a repeated
-  // "- วันนี้มีอะไรต้องทำมั้ย?" block per person — confirmed live
-  // (2026-08-02) that repeating the same question under 4 separate name
-  // headers read as spammy/redundant rather than personal.
-  const noTaskNames = sortedPeople.filter((p) => !p.items.length).map((p) => p.name);
-  if (noTaskNames.length) {
-    msg += `\n${noTaskNames.join(', ')} — วันนี้มีอะไรต้องทำมั้ย?\n`;
+  for (const [cat, { items }] of sortedCategories) {
+    mb.add(`\n${cat}\n`);
+    for (const { line, mentionUser } of items) {
+      mb.add(`- ${line}`);
+      if (mentionUser) mb.add(' ').addMention(mentionUser);
+      mb.add('\n');
+    }
   }
   if (unassigned.length) {
-    msg += `\nยังไม่ระบุผู้รับผิดชอบ\n`;
-    for (const item of unassigned) msg += `- ${item}\n`;
+    mb.add(`\nยังไม่ระบุหมวดหมู่\n`);
+    for (const { line, mentionUser } of unassigned) {
+      mb.add(`- ${line}`);
+      if (mentionUser) mb.add(' ').addMention(mentionUser);
+      mb.add('\n');
+    }
+  }
+  // Anyone on the roster with literally zero active tasks anywhere still
+  // gets asked, combined into one line rather than repeated per person.
+  const busyNames = new Set(tasks.filter((t) => t.assignee).map((t) => t.assignee));
+  const noTaskNames = roster.filter((r) => !busyNames.has(r.name)).map((r) => r.name);
+  if (noTaskNames.length) {
+    mb.add(`\n${noTaskNames.join(', ')} — วันนี้มีอะไรต้องทำมั้ย?\n`);
   }
   // Always say something about meetings, even "none today" — leaving
   // this section out entirely when events.length===0 (old behavior) read
   // as "did Migael even check?" rather than "confirmed, nothing today".
   if (events.length) {
-    msg += `\nวันนี้มีมีตติ้ง 👇\n`;
+    mb.add(`\nวันนี้มีมีตติ้ง 👇\n`);
     for (const e of events) {
-      msg += `\n${e.title}\n${formatMeetingDateTime(e.start_time)}\n${e.meeting_link ? '🔗 ' + e.meeting_link : ''}\n`;
+      mb.add(`\n${e.title}\n${formatMeetingDateTime(e.start_time)}\n${e.meeting_link ? '🔗 ' + e.meeting_link : ''}\n`);
     }
   } else {
-    msg += `\nวันนี้ไม่มีมีตติ้งนะคะ`;
+    mb.add(`\nวันนี้ไม่มีมีตติ้งนะคะ`);
   }
-  if (!sortedPeople.length && !unassigned.length && !events.length) {
-    msg += `\n(ยังไม่มีงานหรือคนในระบบเลยนะคะ)`;
+  if (!sortedCategories.length && !unassigned.length && !events.length) {
+    mb.add(`\n(ยังไม่มีงานหรือคนในระบบเลยนะคะ)`);
   }
-  if (outro) msg += `\n\n${outro}`;
+  if (outro) mb.add(`\n\n${outro}`);
 
-  await push(groupId, msg.trim());
+  await pushMessage(groupId, mb.build());
 }
 cron.schedule('0 10 * * *', withAlert('morning briefing', sendMorningBriefing), { timezone: 'Asia/Bangkok' });
 
