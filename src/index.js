@@ -1296,9 +1296,13 @@ app.get('/debug/roster', (req, res) => {
 app.get('/debug/all-users', (req, res) => {
   res.json(db.all('SELECT id, display_name FROM users'));
 });
+app.get('/debug/webhook-dedup-check', (req, res) => {
+  const count = db.get(`SELECT COUNT(*) as c FROM processed_webhook_events`)?.c || 0;
+  res.json({ totalDeduped: count });
+});
 app.get('/debug/find-task-full', (req, res) => {
   const q = req.query.q || '';
-  res.json(db.all(`SELECT id, title, assignee_id, status, due_date, note, calendar_event_id FROM tasks WHERE title LIKE ?`, [`%${q}%`]));
+  res.json(db.all(`SELECT id, title, assignee_id, status, due_date, note, created_at, calendar_event_id FROM tasks WHERE title LIKE ? ORDER BY created_at`, [`%${q}%`]));
 });
 app.get('/debug/cleanup-dupes', async (req, res) => {
   try {
