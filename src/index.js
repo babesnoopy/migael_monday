@@ -1346,16 +1346,6 @@ app.get('/debug/roster', (req, res) => {
 app.get('/debug/all-users', (req, res) => {
   res.json(db.all('SELECT id, display_name FROM users'));
 });
-app.get('/debug/tasks-for-assignees', (req, res) => {
-  const ids = (req.query.ids || '').split(',').filter(Boolean);
-  res.json(db.all(`SELECT id, title, assignee_id, status, note FROM tasks WHERE assignee_id IN (${ids.map(()=>'?').join(',')}) AND status NOT IN ('done','cancelled')`, ids));
-});
-app.get('/debug/merge-users', (req, res) => {
-  const { staleId, keepId } = req.query;
-  const count = db.get(`SELECT COUNT(*) as c FROM tasks WHERE assignee_id = ?`, [staleId])?.c || 0;
-  db.run(`UPDATE tasks SET assignee_id = ? WHERE assignee_id = ?`, [keepId, staleId]);
-  res.json({ ok: true, reassigned: count });
-});
 // Preview endpoints — compose the exact broadcast message WITHOUT
 // sending it to LINE (see scheduler.js's dry-run mode). Use these for
 // testing from now on instead of the "ทดสอบ..." chat commands, which

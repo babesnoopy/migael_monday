@@ -45,6 +45,49 @@ function removeSeedData() {
   return seedTasks.length;
 }
 
+// Permanent, automatic duplicate-task cleanup (2026-08-06) — runs every
+// boot, not a one-off. sheetSync.js's own matching only ever "sees" one
+// representative task per normalized title in the Map it builds (a plain
+// JS Map can't hold two entries under the same key), so if duplicate
+// rows already exist in the DB (e.g. from a sync that ran before an
+// assignee got merged, splitting the same real task across two
+// different assignee ids), sheetSync silently never notices or cleans
+// up the orphaned copy — it just keeps existing invisibly. The one-off
+// bulk cleanups done manually on 2026-08-04 and 2026-08-06 fixed the
+// state at that moment but nothing stopped it from recurring. This does
+// the same dedup logic automatically on every boot: same normalized
+// title + same assignee + still active = keep one (prefer a sheet-sync
+// row, then the most recently created), delete the rest. Calendar
+// cleanup is deliberately left out here (slow network calls don't
+// belong in the boot sequence) — any orphaned Calendar event from a
+// deleted duplicate is a much smaller problem than a duplicate task
+// showing up in every summary, and can be cleaned up manually if it
+// ever matters.
+function normalizeTaskTitle(t) {
+  return (t || '').trim().toLowerCase().replace(/[\u0E48-\u0E4B]/g, '').replace(/\s+/g, ' ');
+}
+function dedupeDuplicateTasks() {
+  const tasks = db.all(`SELECT id, title, assignee_id, note, created_at FROM tasks WHERE status NOT IN ('done','cancelled')`);
+  const groups = new Map();
+  for (const t of tasks) {
+    const key = normalizeTaskTitle(t.title) + '|||' + (t.assignee_id || 'NONE');
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(t);
+  }
+  let removed = 0;
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const sheetSyncOnes = group.filter((t) => t.note === 'sheet-sync');
+    const keep = sheetSyncOnes.length ? sheetSyncOnes[sheetSyncOnes.length - 1] : group[0];
+    for (const t of group) {
+      if (t.id === keep.id) continue;
+      db.run(`DELETE FROM tasks WHERE id = ?`, [t.id]);
+      removed++;
+    }
+  }
+  return removed;
+}
+
 function run() {
   let removed = 0;
   for (const title of DEBRIS_TITLES) {
@@ -62,6 +105,7 @@ function run() {
     }
   }
   removed += removeSeedData();
+  removed += dedupeDuplicateTasks();
   if (removed > 0) {
     console.log(`[fixTestDebris] Removed ${removed} leftover test task(s).`);
   }
