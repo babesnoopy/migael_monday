@@ -1361,6 +1361,19 @@ app.get('/debug/roster', (req, res) => {
 app.get('/debug/all-users', (req, res) => {
   res.json(db.all('SELECT id, display_name FROM users'));
 });
+app.get('/debug/find-event', (req, res) => {
+  const q = req.query.q || '';
+  res.json(db.all(`SELECT * FROM events WHERE title LIKE ?`, [`%${q}%`]));
+});
+app.get('/debug/cancel-event', async (req, res) => {
+  const ev = db.get(`SELECT * FROM events WHERE id = ?`, [req.query.id]);
+  if (!ev) return res.json({ ok: false, error: 'not found' });
+  if (ev.google_event_id && ev.calendar_id) {
+    await calendarApi.deleteEvent(ev.calendar_id, ev.google_event_id);
+  }
+  db.run(`DELETE FROM events WHERE id = ?`, [ev.id]);
+  res.json({ ok: true, cancelled: ev });
+});
 app.get('/debug/preview-sheet-deletions', async (req, res) => {
   try {
     const sheetSync = require('./sheetSync');
