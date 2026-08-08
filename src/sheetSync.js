@@ -104,6 +104,20 @@ const ASSIGNEE_ALIASES = {
   BABE: 'babe',
 };
 
+// Applies the same ASSIGNEE_ALIASES canonicalization as resolveAssigneeId,
+// without touching the DB — needed anywhere we build a comparison key
+// against a raw sheet cell value (e.g. "KOBORED") that must match the
+// canonical name actually stored on users (e.g. "พี่กบ"). Confirmed live
+// (2026-08-08) that skipping this made the sheet-deletion dry-run flag
+// ~half the active board as "removed", since raw sheet aliases never
+// matched their resolved display_name counterparts.
+function canonicalAssigneeName(name) {
+  if (!name) return null;
+  const clean = name.trim();
+  if (!clean) return null;
+  return ASSIGNEE_ALIASES[clean.toUpperCase()] || clean;
+}
+
 function resolveAssigneeId(name) {
   if (!name) return null;
   const clean = name.trim();
@@ -162,7 +176,7 @@ async function previewDeletions() {
     const title = row[COL.title]?.trim();
     if (!title || title === 'สิ่งที่ต้องทำ') continue;
     const assigneeName = row[COL.assignee]?.trim() || null;
-    seenInSheet.add(normalizeTitle(title) + '|||' + (assigneeName || '').trim().toLowerCase());
+    seenInSheet.add(normalizeTitle(title) + '|||' + (canonicalAssigneeName(assigneeName) || '').trim().toLowerCase());
   }
   const syncedTasks = db.all(`SELECT id, title, assignee_id, status FROM tasks WHERE note = ?`, [SYNC_MARKER]);
   const wouldDelete = [];
@@ -212,7 +226,7 @@ async function run() {
       const category = row[COL.category]?.trim() || null;
       const assigneeName = row[COL.assignee]?.trim() || null;
       const key = normalizeTitle(title);
-      seenInSheet.add(key + '|||' + (assigneeName || '').trim().toLowerCase());
+      seenInSheet.add(key + '|||' + (canonicalAssigneeName(assigneeName) || '').trim().toLowerCase());
       const existing = existingTasks.get(key);
 
       const startDate = toIsoDate(row[COL.startDate]);
