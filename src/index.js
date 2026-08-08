@@ -752,6 +752,21 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
       return `หาข้อมูลนัดเดิมไม่เจอเลยค่ะ ขอโทษด้วย รบกวนพิมพ์รายละเอียดใหม่ทั้งหมดได้ไหมคะ`;
     }
 
+    // Cancellation, not a reschedule — confirmed live gap (2026-08-08):
+    // there was no way to cancel a meeting at all, only create/reschedule
+    // one. "คุยไปแล้วค่ะ เมื่อวาน เอาออกได้เลยกับ adit" went completely
+    // unactionable since the system had nothing to do with it. Deletes
+    // the real Calendar event too, not just the local record — an
+    // orphaned real Calendar invite left behind would be its own source
+    // of confusion (people still seeing/joining a cancelled meeting).
+    if (ex.cancel === true) {
+      if (eventRow.google_event_id && eventRow.calendar_id) {
+        await calendarApi.deleteEvent(eventRow.calendar_id, eventRow.google_event_id);
+      }
+      db.run(`DELETE FROM events WHERE id = ?`, [eventRow.id]);
+      return decision.reply_message || `ยกเลิกนัด "${eventRow.title}" ให้แล้วค่ะ ✅`;
+    }
+
     const updates = {};
     if (ex.title) updates.title = ex.title;
     if (ex.start_time) updates.startTime = ex.start_time;
