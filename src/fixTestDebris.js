@@ -106,6 +106,43 @@ function dedupeDuplicateTasks() {
   return removed;
 }
 
+// Companion to dedupeDuplicateTasks (2026-08-08) — that function only
+// ever compares ACTIVE tasks against each other, so once one duplicate
+// gets marked done (e.g. by sheetSync noticing the sheet checked it off),
+// it drops out of the active-only query entirely and the dedup can no
+// longer see it was ever a duplicate of the still-active leftover.
+// Confirmed live: "ทำ graphic timetable สำหรับ Spatial sound workshop"
+// had a real sheet-synced row correctly marked done, and a stale
+// chat-created row (note=null, pre-dating the sheet write-back) still
+// sitting at to_do forever with no done sibling left in the active pool
+// to compare against. This closes that gap: any still-active task that
+// shares a (title, assignee) with an already-DONE sheet-synced task is
+// almost certainly the same real-world work, just tracked twice — mark
+// it done too rather than leaving it as a permanent phantom "overdue".
+function closeActiveDuplicatesOfDoneTasks() {
+  const doneKeys = new Set(
+    db.all(
+      `SELECT t.title, u.display_name as assignee_name FROM tasks t
+       LEFT JOIN users u ON t.assignee_id = u.id
+       WHERE t.status = 'done' AND t.note = 'sheet-sync'`
+    ).map((t) => normalizeTaskTitle(t.title) + '|||' + (t.assignee_name || '').trim().toLowerCase())
+  );
+  const activeTasks = db.all(
+    `SELECT t.id, t.title, u.display_name as assignee_name FROM tasks t
+     LEFT JOIN users u ON t.assignee_id = u.id
+     WHERE t.status NOT IN ('done','cancelled')`
+  );
+  let closed = 0;
+  for (const t of activeTasks) {
+    const key = normalizeTaskTitle(t.title) + '|||' + (t.assignee_name || '').trim().toLowerCase();
+    if (doneKeys.has(key)) {
+      db.run(`UPDATE tasks SET status = 'done', completed_at = datetime('now') WHERE id = ?`, [t.id]);
+      closed++;
+    }
+  }
+  return closed;
+}
+
 function run() {
   let removed = 0;
   for (const title of DEBRIS_TITLES) {
@@ -123,10 +160,11 @@ function run() {
     }
   }
   removed += removeSeedData();
+  removed += closeActiveDuplicatesOfDoneTasks();
   removed += dedupeDuplicateTasks();
   if (removed > 0) {
-    console.log(`[fixTestDebris] Removed ${removed} leftover test task(s).`);
+    console.log(`[fixTestDebris] Removed/closed ${removed} leftover test task(s).`);
   }
 }
 
-module.exports = { run, dedupeDuplicateTasks };
+module.exports = { run, dedupeDuplicateTasks, closeActiveDuplicatesOfDoneTasks };

@@ -337,7 +337,12 @@ async function run() {
     // running at boot wasn't enough, since this runs again every 3
     // minutes via cron and could re-surface/recreate the same class of
     // duplicate before the next deploy.
-    const removedDupes = require('./fixTestDebris').dedupeDuplicateTasks();
+    const fixTestDebris = require('./fixTestDebris');
+    const closedCount = fixTestDebris.closeActiveDuplicatesOfDoneTasks();
+    if (closedCount > 0) {
+      console.log(`[SheetSync] Closed ${closedCount} stale active task(s) whose sheet-synced duplicate was already done.`);
+    }
+    const removedDupes = fixTestDebris.dedupeDuplicateTasks();
     if (removedDupes > 0) {
       console.log(`[SheetSync] Cleaned up ${removedDupes} duplicate task row(s) after sync.`);
     }
