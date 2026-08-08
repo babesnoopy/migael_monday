@@ -1350,6 +1350,11 @@ app.get('/debug/find-task', (req, res) => {
   const q = req.query.q || '';
   res.json(db.all(`SELECT t.id, t.title, t.status, t.due_date, t.note, u.display_name as assignee FROM tasks t LEFT JOIN users u ON t.assignee_id = u.id WHERE t.title LIKE ?`, [`%${q}%`]));
 });
+app.get('/debug/delete-tasks', (req, res) => {
+  const ids = (req.query.ids || '').split(',').filter(Boolean);
+  for (const id of ids) db.run(`DELETE FROM tasks WHERE id = ?`, [id]);
+  res.json({ ok: true, deleted: ids.length });
+});
 // Preview endpoints — compose the exact broadcast message WITHOUT
 // sending it to LINE (see scheduler.js's dry-run mode). Use these for
 // testing from now on instead of the "ทดสอบ..." chat commands, which
