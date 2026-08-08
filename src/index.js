@@ -1346,6 +1346,15 @@ app.get('/debug/roster', (req, res) => {
 app.get('/debug/all-users', (req, res) => {
   res.json(db.all('SELECT id, display_name FROM users'));
 });
+app.get('/debug/preview-sheet-deletions', async (req, res) => {
+  try {
+    const sheetSync = require('./sheetSync');
+    const preview = await sheetSync.previewDeletions();
+    res.json(preview);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 // Preview endpoints — compose the exact broadcast message WITHOUT
 // sending it to LINE (see scheduler.js's dry-run mode). Use these for
 // testing from now on instead of the "ทดสอบ..." chat commands, which

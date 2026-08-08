@@ -144,6 +144,38 @@ async function findSpreadsheetId() {
   return m ? m[1] : null;
 }
 
+// Read-only dry-run of the deletion logic in run() — fetches the sheet,
+// builds the same seenInSheet set, and reports which sheet-synced DB
+// tasks would be deleted, WITHOUT deleting anything. Used to sanity-
+// check the feature against real data before trusting it to run live.
+async function previewDeletions() {
+  const spreadsheetId = await findSpreadsheetId();
+  if (!spreadsheetId) return { error: 'sheet not found' };
+  const sheets = google.sheets({ version: 'v4', auth: getAuth() });
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `'${SHEET_TAB}'!L2:Z2000`,
+  });
+  const rows = res.data.values || [];
+  const seenInSheet = new Set();
+  for (const row of rows) {
+    const title = row[COL.title]?.trim();
+    if (!title || title === 'สิ่งที่ต้องทำ') continue;
+    const assigneeName = row[COL.assignee]?.trim() || null;
+    seenInSheet.add(normalizeTitle(title) + '|||' + (assigneeName || '').trim().toLowerCase());
+  }
+  const syncedTasks = db.all(`SELECT id, title, assignee_id, status FROM tasks WHERE note = ?`, [SYNC_MARKER]);
+  const wouldDelete = [];
+  for (const t of syncedTasks) {
+    const assignee = t.assignee_id ? db.get(`SELECT display_name FROM users WHERE id = ?`, [t.assignee_id]) : null;
+    const key = normalizeTitle(t.title) + '|||' + (assignee?.display_name || '').trim().toLowerCase();
+    if (!seenInSheet.has(key)) {
+      wouldDelete.push({ id: t.id, title: t.title, assignee: assignee?.display_name || null, status: t.status });
+    }
+  }
+  return { totalSheetSynced: syncedTasks.length, wouldDeleteCount: wouldDelete.length, wouldDelete };
+}
+
 async function run() {
   try {
     const spreadsheetId = await findSpreadsheetId();
@@ -167,6 +199,11 @@ async function run() {
     let categorizedCount = 0;
     let assignedCount = 0;
     let statusSyncedCount = 0;
+    // Tracks every (title+assignee) key actually present in THIS sync
+    // pass, so we can tell afterward which previously-imported rows
+    // disappeared from the sheet entirely (as opposed to just changing
+    // status) — see the deletion pass after this loop.
+    const seenInSheet = new Set();
 
     for (const row of rows) {
       const title = row[COL.title]?.trim();
@@ -175,6 +212,7 @@ async function run() {
       const category = row[COL.category]?.trim() || null;
       const assigneeName = row[COL.assignee]?.trim() || null;
       const key = normalizeTitle(title);
+      seenInSheet.add(key + '|||' + (assigneeName || '').trim().toLowerCase());
       const existing = existingTasks.get(key);
 
       const startDate = toIsoDate(row[COL.startDate]);
@@ -250,6 +288,32 @@ async function run() {
       console.log(`[SheetSync] Imported ${importedCount} new task(s), backfilled category on ${categorizedCount}, backfilled assignee on ${assignedCount}, synced status on ${statusSyncedCount} existing task(s).`);
     }
 
+    // Delete task rows whose sheet row was removed entirely (not just
+    // status-changed) — per Babe's explicit instruction (2026-08-08):
+    // if it's gone from the sheet, delete it, don't leave it stuck as a
+    // permanent zombie "overdue" item. Only touches tasks that came FROM
+    // the sheet (note='sheet-sync') — chat-created tasks are never
+    // affected by this, even though they also get written back to the
+    // sheet, since a race between "just created, not yet round-tripped
+    // into this fetch" and "genuinely deleted" isn't safely distinguishable
+    // by title/assignee alone.
+    // Gated behind ENABLE_SHEET_DELETE_SYNC until verified via
+    // /debug/preview-sheet-deletions against real production data —
+    // deletion is irreversible, so this ships disabled-by-default first.
+    const syncedTasks = db.all(`SELECT id, title, assignee_id FROM tasks WHERE note = ?`, [SYNC_MARKER]);
+    let deletedCount = 0;
+    for (const t of syncedTasks) {
+      const assignee = t.assignee_id ? db.get(`SELECT display_name FROM users WHERE id = ?`, [t.assignee_id]) : null;
+      const key = normalizeTitle(t.title) + '|||' + (assignee?.display_name || '').trim().toLowerCase();
+      if (!seenInSheet.has(key) && process.env.ENABLE_SHEET_DELETE_SYNC === 'true') {
+        db.run(`DELETE FROM tasks WHERE id = ?`, [t.id]);
+        deletedCount++;
+      }
+    }
+    if (deletedCount > 0) {
+      console.log(`[SheetSync] Deleted ${deletedCount} task(s) whose sheet row was removed entirely.`);
+    }
+
     // Self-heal duplicate task rows after every sync, not just at boot
     // (see fixTestDebris.js's dedupeDuplicateTasks header) — this
     // function's own existingTasks Map can only ever hold one entry per
@@ -268,4 +332,4 @@ async function run() {
   }
 }
 
-module.exports = { run };
+module.exports = { run, previewDeletions };
