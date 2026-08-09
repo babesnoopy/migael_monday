@@ -869,16 +869,16 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
         // the day (e.g. content that looked like UNLIVE at first turns
         // out to actually be UNCINEMA once more detail comes in) — allow
         // it to be corrected on update, not just locked in from creation.
-        `UPDATE topics SET summary = ?, reference_link = COALESCE(?, reference_link), category = COALESCE(?, category), updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-        [ex.topic_summary || '', ex.reference_link || null, ex.topic_category || null, effectiveTopicId]
+        `UPDATE topics SET summary = ?, reference_link = COALESCE(?, reference_link), category = COALESCE(?, category), status = COALESCE(?, status), updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        [ex.topic_summary || '', ex.reference_link || null, ex.topic_category || null, ex.topic_status || null, effectiveTopicId]
       );
       linkTopicParticipants(effectiveTopicId, ex.participant_names);
     } else {
       const id = randomUUID();
       db.run(
-        `INSERT INTO topics (id, group_id, title, summary, reference_link, created_by, category)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [id, groupId, ex.topic_title, ex.topic_summary || '', ex.reference_link || null, userId, ex.topic_category || 'UNFEST']
+        `INSERT INTO topics (id, group_id, title, summary, reference_link, created_by, category, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, groupId, ex.topic_title, ex.topic_summary || '', ex.reference_link || null, userId, ex.topic_category || 'UNFEST', ex.topic_status || 'open']
       );
       linkTopicParticipants(id, ex.participant_names);
       gs.linkSession(sessionId, 'topic', id);
