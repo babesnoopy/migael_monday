@@ -1363,6 +1363,15 @@ app.get('/debug/roster', (req, res) => {
 app.get('/debug/all-users', (req, res) => {
   res.json(db.all('SELECT id, display_name FROM users'));
 });
+app.get('/debug/close-tasks-for', (req, res) => {
+  const name = req.query.name || '';
+  const rows = db.all(
+    `SELECT t.id, t.title FROM tasks t JOIN users u ON t.assignee_id = u.id WHERE u.display_name = ? AND t.status NOT IN ('done','cancelled')`,
+    [name]
+  );
+  for (const r of rows) db.run(`UPDATE tasks SET status = 'done', completed_at = CURRENT_TIMESTAMP WHERE id = ?`, [r.id]);
+  res.json({ ok: true, closed: rows });
+});
 app.get('/debug/preview-sheet-deletions', async (req, res) => {
   try {
     const sheetSync = require('./sheetSync');
