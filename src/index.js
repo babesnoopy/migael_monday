@@ -911,45 +911,47 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
   // reality and the person gets a normal confirmation. We don't want a
   // sheet API hiccup to make Migael claim a task didn't close when it
   // did. Errors are logged, not surfaced as a failure in the chat.
-  if (decision.intent === 'status_update' && ex.task_id) {
-    const taskRow = db.get(`SELECT * FROM tasks WHERE id = ?`, [ex.task_id]);
-    if (!taskRow) {
+  if (decision.intent === 'status_update' && (ex.task_id || ex.task_ids?.length)) {
+    const taskIds = ex.task_ids?.length ? ex.task_ids : [ex.task_id];
+    const sheetWrite = require('./sheetWrite');
+    const updated = [];
+
+    for (const taskId of taskIds) {
+      const taskRow = db.get(`SELECT * FROM tasks WHERE id = ?`, [taskId]);
+      if (!taskRow) continue; // skip silently — bulk case shouldn't fail the whole batch over one stale id
+      let sheetResult = null;
+
+      if (ex.new_status === 'done') {
+        db.run(`UPDATE tasks SET status = 'done', completed_at = CURRENT_TIMESTAMP WHERE id = ?`, [taskRow.id]);
+        try { sheetResult = await sheetWrite.markDone(taskRow.title); }
+        catch (err) { console.error('[SheetWrite] markDone failed:', err.message); }
+      } else if (ex.new_status === 'cancelled') {
+        db.run(`UPDATE tasks SET status = 'cancelled' WHERE id = ?`, [taskRow.id]);
+        try { sheetResult = await sheetWrite.markCancelled(taskRow.title); }
+        catch (err) { console.error('[SheetWrite] markCancelled failed:', err.message); }
+      } else if (ex.new_status === 'in_progress') {
+        db.run(`UPDATE tasks SET status = 'in_progress' WHERE id = ?`, [taskRow.id]);
+      }
+
+      if (ex.new_due_date) {
+        db.run(`UPDATE tasks SET due_date = ? WHERE id = ?`, [ex.new_due_date, taskRow.id]);
+        try { sheetResult = await sheetWrite.reschedule(taskRow.title, ex.new_due_date); }
+        catch (err) { console.error('[SheetWrite] reschedule failed:', err.message); }
+      }
+
+      if (sheetResult && sheetResult.ok === false && sheetResult.reason === 'not_found_in_sheet') {
+        console.log(`[SheetWrite] "${taskRow.title}" has no matching sheet row — DB updated, sheet unchanged.`);
+      }
+      updated.push(taskRow.title);
+    }
+
+    if (!updated.length) {
       return decision.reply_message || 'หางานนี้ในระบบไม่เจอเลยค่ะ ขอโทษด้วย';
     }
-
-    const sheetWrite = require('./sheetWrite');
-    let sheetResult = null;
-
-    if (ex.new_status === 'done') {
-      db.run(`UPDATE tasks SET status = 'done', completed_at = CURRENT_TIMESTAMP WHERE id = ?`, [taskRow.id]);
-      try { sheetResult = await sheetWrite.markDone(taskRow.title); }
-      catch (err) { console.error('[SheetWrite] markDone failed:', err.message); }
-    } else if (ex.new_status === 'cancelled') {
-      db.run(`UPDATE tasks SET status = 'cancelled' WHERE id = ?`, [taskRow.id]);
-      try { sheetResult = await sheetWrite.markCancelled(taskRow.title); }
-      catch (err) { console.error('[SheetWrite] markCancelled failed:', err.message); }
-    } else if (ex.new_status === 'in_progress') {
-      db.run(`UPDATE tasks SET status = 'in_progress' WHERE id = ?`, [taskRow.id]);
-      // No sheet write for in_progress in Phase 1 — only done/cancelled/
-      // reschedule were in scope; in_progress is DB-only for now.
+    if (updated.length === 1) {
+      return decision.reply_message || `อัปเดตให้แล้วค่ะ ✅ ${updated[0]}`;
     }
-
-    if (ex.new_due_date) {
-      db.run(`UPDATE tasks SET due_date = ? WHERE id = ?`, [ex.new_due_date, taskRow.id]);
-      try { sheetResult = await sheetWrite.reschedule(taskRow.title, ex.new_due_date); }
-      catch (err) { console.error('[SheetWrite] reschedule failed:', err.message); }
-    }
-
-    if (sheetResult && sheetResult.ok === false && sheetResult.reason === 'not_found_in_sheet') {
-      // Task exists in Migael's DB (e.g. created purely from chat, never
-      // synced to/from the sheet yet) but has no matching row in the
-      // sheet to update — not an error, just nothing to sync. The DB
-      // update above already happened and is what drives replies/
-      // reports, so this is silent by design.
-      console.log(`[SheetWrite] "${taskRow.title}" has no matching sheet row — DB updated, sheet unchanged.`);
-    }
-
-    return decision.reply_message || `อัปเดตให้แล้วค่ะ ✅ ${taskRow.title}`;
+    return decision.reply_message || `อัปเดตให้แล้วค่ะ ✅ ${updated.length} งาน:\n${updated.map((t) => '- ' + t).join('\n')}`;
   }
 
   return null;
