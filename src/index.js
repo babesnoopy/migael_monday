@@ -1375,6 +1375,11 @@ app.get('/debug/roster', (req, res) => {
 app.get('/debug/all-users', (req, res) => {
   res.json(db.all('SELECT id, display_name FROM users'));
 });
+app.get('/debug/resolve-topics', (req, res) => {
+  const ids = (req.query.ids || '').split(',').filter(Boolean);
+  for (const id of ids) db.run(`UPDATE topics SET status = 'resolved' WHERE id = ?`, [id]);
+  res.json({ ok: true, resolved: ids.length });
+});
 app.get('/debug/preview-sheet-deletions', async (req, res) => {
   try {
     const sheetSync = require('./sheetSync');
