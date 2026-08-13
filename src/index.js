@@ -1377,6 +1377,7 @@ app.get('/debug/all-users', (req, res) => {
 });
 app.get('/debug/find-topic', (req, res) => {
   const q = req.query.q || '';
+  if (!q) return res.json(db.all(`SELECT id, title, status, updated_at FROM topics ORDER BY updated_at DESC LIMIT 10`));
   res.json(db.all(`SELECT id, title, summary, status, updated_at FROM topics WHERE title LIKE ? OR summary LIKE ?`, [`%${q}%`, `%${q}%`]));
 });
 app.get('/debug/preview-sheet-deletions', async (req, res) => {
