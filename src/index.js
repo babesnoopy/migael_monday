@@ -1375,27 +1375,6 @@ app.get('/debug/roster', (req, res) => {
 app.get('/debug/all-users', (req, res) => {
   res.json(db.all('SELECT id, display_name FROM users'));
 });
-app.get('/debug/find-topic', (req, res) => {
-  const q = req.query.q || '';
-  if (!q) return res.json(db.all(`SELECT id, title, status, updated_at FROM topics ORDER BY updated_at DESC LIMIT 10`));
-  res.json(db.all(`SELECT id, title, summary, status, updated_at FROM topics WHERE title LIKE ? OR summary LIKE ?`, [`%${q}%`, `%${q}%`]));
-});
-app.get('/debug/create-topic', (req, res) => {
-  const id = randomUUID();
-  db.run(
-    `INSERT INTO topics (id, group_id, title, summary, reference_link, category, status)
-     VALUES (?, ?, ?, ?, ?, ?, 'resolved')`,
-    [
-      id,
-      process.env.PRIMARY_GROUP_ID,
-      'DOME PLAYBACK — Immersive Dome x Physical Sensory',
-      'ลิงก์ DOME PLAYBACK ของ IMMERSIVE DOME X PHYSICAL SENSORY (OAK ฝากไว้ 13 ส.ค.) — ส่งให้คนที่ถามมาได้เลย:\n- 08.09.26_Sunyata Sound Play x c1yp4n9 x decembluer: https://drive.google.com/drive/folders/1kglQh2KUc8esqZONM3Q1mvwHrd4u-Zr9?usp=drive_link\n- 08.02.26_LACTOBACILLUS x BAANKJORK x MEDULLA SPINALIS (Curated by Experimentive x UNCR-LAB): https://drive.google.com/drive/folders/1XjtJ1yrio1P2PX71PbtoC-Vlu6d9H5Os?usp=drive_link',
-      'https://drive.google.com/drive/folders/1kglQh2KUc8esqZONM3Q1mvwHrd4u-Zr9?usp=drive_link',
-      'UNFEST',
-    ]
-  );
-  res.json({ ok: true, id });
-});
 app.get('/debug/preview-sheet-deletions', async (req, res) => {
   try {
     const sheetSync = require('./sheetSync');
