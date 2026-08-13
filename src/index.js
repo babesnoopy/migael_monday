@@ -1375,6 +1375,10 @@ app.get('/debug/roster', (req, res) => {
 app.get('/debug/all-users', (req, res) => {
   res.json(db.all('SELECT id, display_name FROM users'));
 });
+app.get('/debug/find-topic', (req, res) => {
+  const q = req.query.q || '';
+  res.json(db.all(`SELECT id, title, summary, status, updated_at FROM topics WHERE title LIKE ? OR summary LIKE ?`, [`%${q}%`, `%${q}%`]));
+});
 app.get('/debug/preview-sheet-deletions', async (req, res) => {
   try {
     const sheetSync = require('./sheetSync');
