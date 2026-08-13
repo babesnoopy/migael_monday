@@ -190,6 +190,18 @@ async function handleEvent(event) {
   // still count as calling her by name, not go silent.
   const mentionsMigael = text.includes('มิเกล') || /\bmi\s?g[ua]?e?l\b/i.test(text);
   const session = gs.getActiveSession(groupId);
+  // A genuine LINE reply/quote to a specific message Migael sent takes
+  // priority over the generic "most recently active session" — resolves
+  // correctly even when several things (e.g. multiple stale-topic
+  // nudges) were sent close together, which the session-only approach
+  // could never disambiguate (see quoted_message_links in db.js).
+  const quotedMessageId = event.message?.quotedMessageId;
+  const quotedLink = quotedMessageId
+    ? db.get(`SELECT ref_type, ref_id FROM quoted_message_links WHERE line_message_id = ?`, [quotedMessageId])
+    : null;
+  const effectiveSessionForThread = quotedLink
+    ? { linked_ref_type: quotedLink.ref_type, linked_ref_id: quotedLink.ref_id }
+    : session;
   // FIX (real complaint): having an open session used to make wasAddressed
   // true on its own, which told Claude "you were addressed, feel free to
   // reply" for EVERY follow-up message in a tracked thread — even casual
@@ -199,7 +211,7 @@ async function handleEvent(event) {
   // Claude specifically when a message is genuinely answering a question
   // Migael just asked) is what re-enables a reply for real Q&A follow-ups,
   // while ambient continuations stay silent by default.
-  const wasAddressed = mentionsMigael || isNew;
+  const wasAddressed = mentionsMigael || isNew || !!quotedLink;
 
   // Deterministic admin command: list everyone Migael currently knows
   // about + their team, straight from the DB — a quick, honest way to
@@ -286,7 +298,7 @@ async function handleEvent(event) {
     messageText: text,
     recentMessages: recentByGroup.get(groupId) || [],
     teamRoster: roster,
-    openThread: session ? buildOpenThreadSummary(session) : null,
+    openThread: effectiveSessionForThread ? buildOpenThreadSummary(effectiveSessionForThread) : null,
     groupData: snapshot,
     wasAddressed,
     imageBase64,

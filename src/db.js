@@ -39,6 +39,23 @@ async function init() {
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
+  // Maps a LINE message id (a message MIGAEL SENT) to whatever it was
+  // about, so a genuine LINE reply/quote to that specific message can
+  // be resolved exactly — instead of guessing from "whichever session
+  // is most recently active for the group", which breaks the moment
+  // more than one thing gets nudged/asked about around the same time.
+  // Confirmed live (2026-08-13): multiple stale-topic nudges sent close
+  // together meant only a reply to the LAST one could ever be linked
+  // correctly; replies to earlier ones in the same batch had no way to
+  // resolve. TTL isn't enforced here — old rows are harmless clutter,
+  // small enough not to matter.
+  db.run(`CREATE TABLE IF NOT EXISTS quoted_message_links (
+    line_message_id TEXT PRIMARY KEY,
+    ref_type TEXT NOT NULL,
+    ref_id TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
   // Lets a plain task (due date only, no specific time) also get an
   // all-day Calendar entry, and remember which Google event that was —
   // added after tasks already existed in production, so check first
