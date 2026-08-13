@@ -545,6 +545,18 @@ cron.schedule('30 10 * * *', withAlert('stale topic nudge', async () => {
     );
     const baseText = `📌 เรื่อง "${t.title}" เงียบไปหลายวันแล้วนะคะ มีอัปเดตอะไรไหมคะ\n${t.summary}${t.reference_link ? '\n🔗 ' + t.reference_link : ''}`;
     await pushWithMentions(groupId, baseText, participants);
+
+    // Link this nudge to the topic (2026-08-13 fix) — without this, a
+    // reply like "อันนี้เทสเรียบร้อยแล้ว" had zero context for what
+    // "อันนี้" referred to, since proactive broadcasts never opened a
+    // listening session the way chat-triggered task/event/topic capture
+    // does. Confirmed live: replies to these nudges went nowhere. Note:
+    // if several topics get nudged in the same run, only a reply sent
+    // shortly after the LAST one will resolve correctly, since sessions
+    // are tracked one-at-a-time per group — an acceptable tradeoff over
+    // the previous total lack of context.
+    const nudgeSessionId = gs.openSession(groupId, null);
+    gs.linkSession(nudgeSessionId, 'topic', t.id);
   }
 }, { timezone: 'Asia/Bangkok' }));
 
