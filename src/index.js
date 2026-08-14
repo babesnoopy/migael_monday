@@ -1375,10 +1375,6 @@ app.get('/debug/roster', (req, res) => {
 app.get('/debug/all-users', (req, res) => {
   res.json(db.all('SELECT id, display_name FROM users'));
 });
-app.get('/debug/fix-identity', (req, res) => {
-  db.run(`UPDATE users SET display_name = 'แพร' WHERE id = 'Ubaa5d750b525bd542b16288503216103'`);
-  res.json({ ok: true });
-});
 app.get('/debug/preview-sheet-deletions', async (req, res) => {
   try {
     const sheetSync = require('./sheetSync');
