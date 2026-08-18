@@ -1375,6 +1375,12 @@ app.get('/debug/roster', (req, res) => {
 app.get('/debug/all-users', (req, res) => {
   res.json(db.all('SELECT id, display_name FROM users'));
 });
+app.get('/debug/resolve-topic-by-title', (req, res) => {
+  const q = req.query.q || '';
+  const rows = db.all(`SELECT id, title FROM topics WHERE title LIKE ? AND status = 'open'`, [`%${q}%`]);
+  for (const r of rows) db.run(`UPDATE topics SET status = 'resolved' WHERE id = ?`, [r.id]);
+  res.json({ ok: true, resolved: rows });
+});
 app.get('/debug/preview-sheet-deletions', async (req, res) => {
   try {
     const sheetSync = require('./sheetSync');
