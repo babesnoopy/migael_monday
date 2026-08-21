@@ -301,6 +301,7 @@ async function handleEvent(event) {
     openThread: effectiveSessionForThread ? buildOpenThreadSummary(effectiveSessionForThread) : null,
     groupData: snapshot,
     wasAddressed,
+    isQuoteReplyToMigael: !!quotedLink,
     imageBase64,
     imageMediaType,
   });
