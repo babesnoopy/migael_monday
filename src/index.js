@@ -1111,7 +1111,26 @@ async function handlePersonal(event, { text, imageBase64, imageMediaType }) {
 }
 
 function reply(token, text) {
-  return client.replyMessage(token, { type: 'text', text });
+  const result = client.replyMessage(token, { type: 'text', text });
+  // Track every message Migael sends as a reply, not just proactive
+  // topic nudges — confirmed live (2026-08-21): a genuine LINE quote-
+  // reply to Migael's own onboarding greeting ("เดี๋ยววันนี้สรุป role...")
+  // went completely unanswered, because wasAddressed only recognized
+  // literal "มิเกล" mentions or a link recorded specifically for topic
+  // nudges — replying directly to something Migael said wasn't itself
+  // enough to count as addressing her. Now ANY reply Migael sends gets
+  // logged generically (ref_type='migael_message', no specific ref_id
+  // needed), so a quote-reply to it is recognized as addressed even
+  // without a task/topic/event attached.
+  result.then((res) => {
+    const sentId = res?.sentMessages?.[0]?.id;
+    if (sentId) {
+      try {
+        db.run(`INSERT OR REPLACE INTO quoted_message_links (line_message_id, ref_type, ref_id) VALUES (?, 'migael_message', ?)`, [sentId, sentId]);
+      } catch (err) { /* best-effort — never block the reply on this */ }
+    }
+  }).catch(() => {});
+  return result;
 }
 
 // Lightweight read-only debug endpoint — lets us check what Migael
