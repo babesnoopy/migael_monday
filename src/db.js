@@ -39,6 +39,23 @@ async function init() {
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
+  // Action items Claude spotted in a meeting-note-style message but
+  // hasn't created as real tasks yet — waiting on an explicit "ใช่"/
+  // confirm reply first. Per Babe's explicit design (2026-08-21): the
+  // earlier version of auto-task-creation from group chat created
+  // "มั่วๆ" (junk) tasks with no confirmation step, which polluted the
+  // sheet with garbage. This table + the linked listening session is
+  // what makes the confirm step possible — items sit here as a proposal
+  // until confirmed, and are only ever inserted into the real tasks
+  // table once the sender explicitly agrees.
+  db.run(`CREATE TABLE IF NOT EXISTS pending_action_items (
+    id TEXT PRIMARY KEY,
+    group_id TEXT NOT NULL,
+    items TEXT NOT NULL,
+    created_by TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
   // Maps a LINE message id (a message MIGAEL SENT) to whatever it was
   // about, so a genuine LINE reply/quote to that specific message can
   // be resolved exactly — instead of guessing from "whichever session

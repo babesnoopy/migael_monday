@@ -327,7 +327,7 @@ async function handleEvent(event) {
       : null;
 
   console.log(`[Decision] group=${groupId} text="${text}" intent=${decision.intent} needs_clarification=${decision.needs_clarification} participate=${decision.participate} is_meeting=${decision.extracted?.is_meeting} calendar_name=${decision.extracted?.calendar_name} stated_name=${decision.extracted?.stated_name} team_name=${decision.extracted?.team_name}`);
-  const overrideReply = await applyDecision({ decision, groupId, userId, userName, sessionId });
+  const overrideReply = await applyDecision({ decision, groupId, userId, userName, sessionId, text });
 
   // If this is a brand-new person, only skip the onboarding prompt when
   // their message actually WAS a self-introduction (intent came back as
@@ -393,7 +393,10 @@ function formatThaiDate(dbDateString) {
   }).format(d);
 }
 
-async function applyDecision({ decision, groupId, userId, userName, sessionId }) {
+async function applyDecision({ decision, groupId, userId, userName, sessionId, text }) {
+  // Needed for the pending-action-item confirm check below — applyDecision
+  // only ever received the session ID before, not the row itself.
+  const session = sessionId ? db.get(`SELECT * FROM listening_sessions WHERE id = ?`, [sessionId]) : null;
   const ex = decision.extracted || {};
 
   // Resolves team member names (from attendee_names, matched against the
@@ -896,7 +899,55 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId })
       linkTopicParticipants(id, ex.participant_names);
       gs.linkSession(sessionId, 'topic', id);
     }
+
+    // Meeting-note action items Claude spotted but must NOT auto-create
+    // (per Babe's explicit design, 2026-08-21 — the earlier version
+    // created "มั่วๆ" junk tasks straight from group chat with no
+    // confirm step). Store as a pending proposal linked to this session
+    // so a follow-up "ใช่"/confirm reply can create them for real.
+    if (ex.proposed_tasks?.length) {
+      const proposalId = randomUUID();
+      db.run(
+        `INSERT INTO pending_action_items (id, group_id, items, created_by) VALUES (?, ?, ?, ?)`,
+        [proposalId, groupId, JSON.stringify(ex.proposed_tasks), userId]
+      );
+      gs.linkSession(sessionId, 'action_items', proposalId);
+      const lines = ex.proposed_tasks.map((t, i) => `${i + 1}. ${t.assignee_name ? t.assignee_name + ' - ' : ''}${t.title}`);
+      return `เจอ action item จากโน้ตนี้ ${ex.proposed_tasks.length} อันค่ะ อยากให้สร้างเป็นงานเลยมั้ยคะ:\n${lines.join('\n')}\n\nพิมพ์ "ใช่" เพื่อสร้างทั้งหมด หรือบอกว่าอยากตัดอันไหนออกก็ได้ค่ะ`;
+    }
+
     return decision.reply_message || `บันทึกไว้แล้วค่ะ 📌 "${ex.topic_title}"`;
+  }
+
+  // Confirming (or adjusting) a pending action-item proposal — only
+  // reachable when a listening session is linked to one (see log_topic's
+  // proposed_tasks handling above). Deliberately simple/deterministic
+  // (no LLM judgment call on "did they say yes") since silently
+  // creating tasks is exactly the failure mode this whole feature exists
+  // to prevent — an ambiguous reply here should NOT create anything.
+  if (session?.linked_ref_type === 'action_items' && session.linked_ref_id) {
+    const proposal = db.get(`SELECT * FROM pending_action_items WHERE id = ?`, [session.linked_ref_id]);
+    if (proposal && /^(ใช่|yes|ok|โอเค|ตกลง|confirm|ยืนยัน)/i.test(text.trim())) {
+      const items = JSON.parse(proposal.items);
+      const created = [];
+      const skipped = [];
+      for (const item of items) {
+        const assigneeId = resolveAssigneeId(item.assignee_name);
+        const dup = findDuplicateActiveTask(item.title, assigneeId);
+        if (dup) { skipped.push(item.title); continue; }
+        const id = randomUUID();
+        db.run(
+          `INSERT INTO tasks (id, title, assignee_id, created_by, group_id, status, start_date) VALUES (?, ?, ?, ?, ?, 'to_do', datetime('now'))`,
+          [id, item.title, assigneeId, userId, groupId]
+        );
+        await writeNewTaskToSheet({ title: item.title, assignee: item.assignee_name });
+        created.push(item.title);
+      }
+      gs.closeSession(sessionId, 'confirmed');
+      let msg = created.length ? `สร้างงานให้แล้วค่ะ ✅ ${created.length} รายการ:\n${created.map((t) => '- ' + t).join('\n')}` : 'ไม่มีรายการใหม่ที่ต้องสร้างเพิ่มค่ะ';
+      if (skipped.length) msg += `\n\n(ข้ามไป ${skipped.length} รายการที่มีอยู่แล้ว)`;
+      return msg;
+    }
   }
 
   if (decision.intent === 'recap_topic' && (ex.topic_id || ex.topic_title)) {
