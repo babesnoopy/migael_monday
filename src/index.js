@@ -1452,9 +1452,6 @@ app.get('/debug/roster', (req, res) => {
 app.get('/debug/all-users', (req, res) => {
   res.json(db.all('SELECT id, display_name FROM users'));
 });
-app.get('/debug/all-tasks', (req, res) => {
-  res.json(db.all(`SELECT t.id, t.title, t.status, t.due_date, t.note, u.display_name as assignee FROM tasks t LEFT JOIN users u ON t.assignee_id = u.id ORDER BY t.created_at DESC LIMIT 20`));
-});
 app.get('/debug/preview-sheet-deletions', async (req, res) => {
   try {
     const sheetSync = require('./sheetSync');
