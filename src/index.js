@@ -1045,6 +1045,12 @@ async function handlePersonal(event, { text, imageBase64, imageMediaType }) {
     groupData: relayGroupId ? getGroupDataSnapshot(relayGroupId) : {},
     wasAddressed: true,
   });
+  // Personal chat never had this logging at all — the group handler's
+  // [Decision] line only fires on the group code path, so debugging any
+  // "personal chat didn't respond" report meant flying blind. Confirmed
+  // live (2026-08-21) investigating a pasted meeting-note message with
+  // no visibility into what Claude actually decided.
+  console.log(`[Decision:personal] text="${text.slice(0, 80)}" intent=${decision.intent} needs_clarification=${decision.needs_clarification} participate=${decision.participate} reply_len=${(decision.reply_message || '').length}`);
   if (!decision.reply_message && decision.clarifying_question) {
     decision.reply_message = decision.clarifying_question;
   }
