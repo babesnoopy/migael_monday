@@ -667,6 +667,12 @@ async function sendEveningRecap({ force = false } = {}) {
         for (const r of roster) mb.addMention({ id: r.id, display_name: r.name }).add(' ');
         mb.add('พรุ่งนี้ใครมีงานอะไรเพิ่มมั้ยคะ บอกมาได้เลยนะคะ 🙏');
       }
+      // Per Babe's explicit request (2026-08-21): remind the team every
+      // evening to add their own checklist items directly in the sheet,
+      // with the link right there so nobody has to go dig for it.
+      if (process.env.UNFEST_CHECKLIST_SHEET_ID) {
+        mb.add(`\n\nใครมีงานอะไรเพิ่ม อย่าลืมไปเพิ่ม checklist ในชีทด้วยนะคะ 📋\nhttps://docs.google.com/spreadsheets/d/${process.env.UNFEST_CHECKLIST_SHEET_ID}/edit`);
+      }
 
       await pushMessage(groupId, mb.build());
     }
