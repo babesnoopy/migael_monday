@@ -36,13 +36,24 @@ const ALIASES = {
 };
 
 // Known same-person pairs that DON'T share an exact display_name string,
-// so the general by-name pass can't catch them automatically — a LINE
-// profile name ("Kobored") vs the name given during chat onboarding
-// ("พี่กบ") for the same real person's second account. Merge by id
-// directly. staleId -> canonicalId.
-const KNOWN_ID_PAIRS = [
-  ['Ubf336464e8fc6fd5eb6af502b2415243', 'Ubaa5d750b525bd542b16288503216103'], // "Kobored" -> พี่กบ, confirmed 2026-08-02
-];
+// so the general by-name pass can't catch them automatically. Empty for
+// now — see file header dated 2026-08-21 for why the one entry that used
+// to live here was wrong.
+//
+// CORRECTION (2026-08-21): the entry that used to be here —
+// ['Ubf336464...', 'Ubaa5d750...'] labeled "Kobored -> พี่กบ" — was
+// based on a mistaken assumption from 2026-08-02 that these were two
+// LINE accounts of the SAME person. They are NOT. Direct LINE API
+// verification (client.getGroupMemberProfile) on both ids confirmed
+// they are two DIFFERENT real people: Ubaa5d750... is genuinely "Call
+// Me Pear" (แพร), and Ubf336464... is genuinely "Kobored" (พี่กบ). That
+// wrong hardcoded pair silently overwrote พี่กบ's real account's
+// display_name to "แพร" on every single boot, which is why the mixup
+// kept recurring even after being manually fixed each time — this
+// array ran unconditionally in run(), undoing the fix on the very next
+// deploy. This caused a real incident: Migael publicly @-tagged แพร in
+// the group while addressing a message clearly meant for พี่กบ.
+const KNOWN_ID_PAIRS = [];
 
 function mergeUser(staleId, canonicalId) {
   if (staleId === canonicalId) return { mergedTasks: 0 };
