@@ -97,13 +97,14 @@ function resolveTeamId(categoryName) {
 const ASSIGNEE_ALIASES = {
   KOBORED: 'พี่กบ',
   TUM: 'Tum',
-  PAT: 'Pat',
+  PAT: 'แพท',
   PEARY: 'แพร',
   'CALL ME PEAR': 'แพร',
   PEAR: 'แพร',
   NATAVAN: 'พี่มิ้ว',
   CAN: 'แคน',
   BABE: 'babe',
+  OAK: 'โอ็ค',
 };
 
 // Applies the same ASSIGNEE_ALIASES canonicalization as resolveAssigneeId,
