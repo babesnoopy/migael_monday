@@ -1456,6 +1456,10 @@ app.get('/debug/fix-kobored', (req, res) => {
   db.run(`UPDATE users SET display_name = 'พี่กบ' WHERE id = 'Ubf336464e8fc6fd5eb6af502b2415243'`);
   res.json({ ok: true });
 });
+app.get('/debug/group-members-raw', (req, res) => {
+  const groupId = req.query.groupId || gs.getPrimaryGroupId();
+  res.json(db.all(`SELECT gm.user_id, u.display_name FROM group_members gm LEFT JOIN users u ON gm.user_id = u.id WHERE gm.group_id = ?`, [groupId]));
+});
 app.get('/debug/merge-duplicate', (req, res) => {
   const { staleId, keepId } = req.query;
   if (!staleId || !keepId) return res.json({ ok: false, error: 'need staleId and keepId' });
