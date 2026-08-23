@@ -210,29 +210,29 @@ function formatThaiHeaderDate() {
 
 // Urgency rank for sorting: lower = more urgent. Tasks with no due date
 // rank last (but still above people with zero tasks at all).
-function urgencyRank(dueDateStr, todayIso) {
-  if (!dueDateStr) return 3;
-  const due = String(dueDateStr).slice(0, 10);
-  if (due < todayIso) return 0; // overdue
-  if (due === todayIso) return 1; // due today
-  return 2; // due later
+function urgencyRank(dateStr, todayIso) {
+  if (!dateStr) return 3;
+  const d = String(dateStr).slice(0, 10);
+  if (d < todayIso) return 0; // overdue
+  if (d === todayIso) return 1; // today
+  return 2; // later
 }
 
-// Relative Thai label for a due date, matching the format agreed on
-// (เลยกำหนด / due วันนี้ / due พรุ่งนี้ / due <short weekday>) — never a
+// Relative Thai label for a date, matching the format agreed on
+// (เลยกำหนด / วันนี้ / พรุ่งนี้ / <short weekday>) — never a
 // raw ISO date, per spec.
-function dueLabel(dueDateStr, todayIso) {
-  if (!dueDateStr) return null;
-  const due = String(dueDateStr).slice(0, 10);
-  if (due < todayIso) return 'เลยกำหนด';
-  if (due === todayIso) return 'due วันนี้';
+function dueLabel(dateStr, todayIso) {
+  if (!dateStr) return null;
+  const d = String(dateStr).slice(0, 10);
+  if (d < todayIso) return 'เลยกำหนด';
+  if (d === todayIso) return 'วันนี้';
   const tomorrow = new Date(todayIso + 'T00:00:00+07:00');
   tomorrow.setDate(tomorrow.getDate() + 1);
   const tomorrowIso = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(tomorrow);
-  if (due === tomorrowIso) return 'due พรุ่งนี้';
-  const dueDateObj = new Date(due + 'T00:00:00+07:00');
-  const weekday = new Intl.DateTimeFormat('th-TH', { timeZone: 'Asia/Bangkok', weekday: 'short' }).format(dueDateObj);
-  return `due ${weekday}`;
+  if (d === tomorrowIso) return 'พรุ่งนี้';
+  const dateObj = new Date(d + 'T00:00:00+07:00');
+  const weekday = new Intl.DateTimeFormat('th-TH', { timeZone: 'Asia/Bangkok', weekday: 'short' }).format(dateObj);
+  return weekday;
 }
 
 // Formats a real meeting's start_time like "31 ก.ค. 13:00 น." — per
@@ -261,12 +261,12 @@ async function sendMorningBriefing({ force = false, intro = null, outro = null }
   const roster = gs.getRoster(groupId);
   const uncommuEvents = await getTodayUncommuEvents();
   const tasks = db.all(
-    `SELECT t.id, t.title, t.status, t.due_date, t.is_urgent, u.id as assignee_id, u.display_name as assignee, tm.name as category
+    `SELECT t.id, t.title, t.status, t.start_date, t.due_date, t.is_urgent, u.id as assignee_id, u.display_name as assignee, tm.name as category
      FROM tasks t
      LEFT JOIN users u ON t.assignee_id = u.id
      LEFT JOIN teams tm ON t.team_id = tm.id
      WHERE t.status NOT IN ('done', 'cancelled')
-     ORDER BY t.due_date`
+     ORDER BY t.start_date`
   );
   const events = db.all(
     // Real meetings only — excludes the all-day Calendar entries every
@@ -294,8 +294,8 @@ async function sendMorningBriefing({ force = false, intro = null, outro = null }
   const byCategory = new Map(); // category name -> {rank, items:[{line, mentionUser}]}
   const unassigned = [];
   for (const t of tasks) {
-    const rank = urgencyRank(t.due_date, todayIso);
-    const label = dueLabel(t.due_date, todayIso);
+    const rank = urgencyRank(t.start_date, todayIso);
+    const label = dueLabel(t.start_date, todayIso);
     const line = t.title + (label ? ` (${label})` : '') + (t.is_urgent ? ' 🔴' : '');
     const mentionUser = t.assignee ? { id: t.assignee_id, display_name: t.assignee } : null;
     const cat = t.category || null;
@@ -376,8 +376,8 @@ async function sendAfternoonCheckin({ force = false } = {}) {
   const relevant = db.all(
     `SELECT t.title, u.id as assignee_id, u.display_name as assignee FROM tasks t
      LEFT JOIN users u ON t.assignee_id = u.id
-     WHERE t.status NOT IN ('done', 'cancelled') AND date(t.due_date) <= date('now', '+7 hours')
-     ORDER BY t.due_date`
+     WHERE t.status NOT IN ('done', 'cancelled') AND date(t.start_date) <= date('now', '+7 hours')
+     ORDER BY t.start_date`
   );
   if (!relevant.length && !force) return;
 
@@ -528,6 +528,62 @@ async function checkOverdueTasks() {
   }
 }
 
+// ---- Approaching-deadline reminder: per Babe's explicit request
+// (2026-08-21) once "วันที่เริ่มต้น" became the date that drives daily
+// summaries, "กำหนดเสร็จ" (due date) needed its own separate purpose —
+// a heads-up a couple days BEFORE the real deadline hits, distinct from
+// checkOverdueTasks above (which only fires once the deadline has
+// already passed). Same quiet-hours/batching/reminder-dedup pattern. ----
+async function checkApproachingDeadlines() {
+  const groupId = gs.getPrimaryGroupId();
+  if (!groupId) return;
+
+  const hourBangkok = Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Bangkok', hour: '2-digit', hour12: false }).format(new Date()));
+  if (hourBangkok < 9 || hourBangkok >= 22) return;
+
+  const approaching = db.all(
+    `SELECT t.*, u.id as assignee_id2, u.display_name as assignee_name FROM tasks t
+     LEFT JOIN users u ON t.assignee_id = u.id
+     WHERE t.status NOT IN ('done', 'cancelled')
+       AND t.due_date IS NOT NULL
+       AND date(t.due_date) BETWEEN date('now', '+7 hours') AND date('now', '+7 hours', '+2 days')`
+  );
+
+  const dueForReminder = [];
+  for (const t of approaching) {
+    // One reminder per task for this whole approaching-window — no
+    // repeat-interval needed like overdue nagging has, since this is a
+    // one-time heads-up, not an ongoing nag.
+    const already = db.get(
+      `SELECT id FROM reminders WHERE ref_type='task' AND ref_id=? AND reminder_type='deadline_approaching'`,
+      [t.id]
+    );
+    if (already) continue;
+    dueForReminder.push(t);
+  }
+
+  if (!dueForReminder.length) return;
+
+  const mb = createMentionBuilder();
+  mb.add(`⏳ แจ้งเตือนค่ะ งานที่ใกล้ถึงกำหนดส่งแล้ว (${dueForReminder.length} รายการ)\n`);
+  for (const t of dueForReminder) {
+    const label = dueLabel(t.due_date, bangkokTodayIso());
+    mb.add(`- ${t.title}${label ? ` (กำหนดส่ง ${label})` : ''}`);
+    if (t.assignee_id2) mb.add(' ').addMention({ id: t.assignee_id2, display_name: t.assignee_name });
+    mb.add('\n');
+  }
+  await pushMessage(groupId, mb.build());
+
+  for (const t of dueForReminder) {
+    db.run(
+      `INSERT INTO reminders (id, ref_type, ref_id, reminder_type, scheduled_at, sent_at, group_id)
+       VALUES (?, 'task', ?, 'deadline_approaching', datetime('now'), datetime('now'), ?)`,
+      [require('crypto').randomUUID(), t.id, groupId]
+    );
+  }
+}
+cron.schedule('0 11 * * *', withAlert('approaching deadline check', checkApproachingDeadlines), { timezone: 'Asia/Bangkok' });
+
 // ---- Stale topic nudge: once a day, ping topics nobody's touched in a
 // while, tagging whoever was involved — this is what keeps ideas/specs
 // from silently dying in chat once the conversation moves on. ----
@@ -596,7 +652,7 @@ async function sendEveningRecap({ force = false } = {}) {
       `SELECT t.title, u.display_name as assignee, tm.name as team_name FROM tasks t
        LEFT JOIN users u ON t.assignee_id = u.id
        LEFT JOIN teams tm ON t.team_id = tm.id
-       WHERE t.status NOT IN ('done', 'cancelled') AND date(t.due_date) <= date('now', '+7 hours')`
+       WHERE t.status NOT IN ('done', 'cancelled') AND date(t.start_date) <= date('now', '+7 hours')`
     );
 
     if (done.length || pending.length || force) {
