@@ -1470,6 +1470,16 @@ app.get('/debug/roster', (req, res) => {
 app.get('/debug/all-users', (req, res) => {
   res.json(db.all('SELECT id, display_name FROM users'));
 });
+app.get('/debug/merge-duplicate', (req, res) => {
+  const { staleId, keepId } = req.query;
+  if (!staleId || !keepId) return res.json({ ok: false, error: 'need staleId and keepId' });
+  const taskCount = db.get(`SELECT COUNT(*) as c FROM tasks WHERE assignee_id = ?`, [staleId])?.c || 0;
+  db.run(`UPDATE tasks SET assignee_id = ? WHERE assignee_id = ?`, [keepId, staleId]);
+  db.run(`INSERT OR IGNORE INTO group_members (group_id, user_id) SELECT group_id, ? FROM group_members WHERE user_id = ?`, [keepId, staleId]);
+  db.run(`DELETE FROM group_members WHERE user_id = ?`, [staleId]);
+  db.run(`DELETE FROM users WHERE id = ?`, [staleId]);
+  res.json({ ok: true, tasksReassigned: taskCount });
+});
 app.get('/debug/preview-sheet-deletions', async (req, res) => {
   try {
     const sheetSync = require('./sheetSync');
