@@ -1470,6 +1470,20 @@ app.get('/debug/roster', (req, res) => {
 app.get('/debug/all-users', (req, res) => {
   res.json(db.all('SELECT id, display_name FROM users'));
 });
+app.get('/debug/create-topic-quick', (req, res) => {
+  const id = randomUUID();
+  db.run(
+    `INSERT INTO topics (id, group_id, title, summary, category, status) VALUES (?, ?, ?, ?, ?, 'resolved')`,
+    [
+      id,
+      process.env.PRIMARY_GROUP_ID,
+      'BAGF2026 - Southeast Asia Animation Industry Panel',
+      'พี่กบแชร์โพสต์จาก Borneo Animation & Games Festival 2026 (BAGF2026) — panel หัวข้อ "Southeast Asia Animation Industry" วันที่ 2 (20 ส.ค. 2026, 16:00-16:40) วิทยากรคือ Nop Dharmavanich (VP, Thai Animation and Computer Graphics Association) ขอให้พี่มิ้วเก็บไว้ทำการบ้านค้นคว้า PR (research)',
+      'UNFEST',
+    ]
+  );
+  res.json({ ok: true, id });
+});
 app.get('/debug/preview-sheet-deletions', async (req, res) => {
   try {
     const sheetSync = require('./sheetSync');
