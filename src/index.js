@@ -131,6 +131,24 @@ async function handleEvent(event) {
   }
 
   if (event.type !== 'message') return;
+
+  // Register the sender as a member (and their group) for message types
+  // that get dropped below (stickers, etc.) before any processing
+  // happens. Confirmed live (2026-08-23): พี่กบ's first message in the
+  // new group was a sticker; since registration only ever happened for
+  // text/image messages, he was never added and stayed invisible to
+  // every roster/summary/mention lookup even though he had genuinely
+  // messaged the group. A sticker carries no useful text to analyze,
+  // but "this real person exists and is in this group" is true
+  // regardless of what they sent. Scoped to non-text/image only, so it
+  // never runs twice or interferes with the real isNew/onboarding check
+  // that the text/image path already does further below.
+  if (event.source.type === 'group' && event.source.userId && event.message.type !== 'text' && event.message.type !== 'image') {
+    const profile = await client.getGroupMemberProfile(event.source.groupId, event.source.userId).catch(() => null);
+    gs.upsertGroup(event.source.groupId, null);
+    gs.upsertUser(event.source.userId, profile ? profile.displayName : 'ทีม', event.source.groupId);
+  }
+
   if (event.message.type !== 'text' && event.message.type !== 'image') return;
 
   // Always download and analyze every image the moment it arrives — we
