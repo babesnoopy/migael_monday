@@ -99,6 +99,8 @@ const ASSIGNEE_ALIASES = {
   TUM: 'Tum',
   PAT: 'Pat',
   PEARY: 'แพร',
+  'CALL ME PEAR': 'แพร',
+  PEAR: 'แพร',
   NATAVAN: 'พี่มิ้ว',
   CAN: 'แคน',
   BABE: 'babe',
