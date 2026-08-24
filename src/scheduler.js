@@ -752,6 +752,49 @@ async function sendEveningRecap({ force = false } = {}) {
 }
 cron.schedule('0 22 * * *', withAlert('evening recap', sendEveningRecap), { timezone: 'Asia/Bangkok' });
 
+// ---- Secondary group (e.g. CR-Lab) light-touch pointers ----
+// CR-Lab is the same 5-person team as the primary UNFEST'26 group, just
+// a different LINE chat where they happen to talk more day-to-day. Per
+// Babe's explicit request (2026-08-24): do NOT duplicate the full
+// morning/checkin/evening broadcasts here — that would just be spammy
+// noise for the same people twice. Instead, two short pointer messages
+// a day that nudge the team toward the real checklist sheet. Both are
+// no-ops if SECONDARY_GROUP_ID isn't set, so this is fully inert until
+// Migael actually joins that group and the id is configured.
+function checklistSheetLink() {
+  return process.env.UNFEST_CHECKLIST_SHEET_ID
+    ? `https://docs.google.com/spreadsheets/d/${process.env.UNFEST_CHECKLIST_SHEET_ID}/edit`
+    : null;
+}
+
+async function sendSecondaryMidday({ force = false } = {}) {
+  const groupId = process.env.SECONDARY_GROUP_ID;
+  if (!groupId) return;
+
+  const row = db.get(
+    `SELECT COUNT(*) as n FROM tasks WHERE status NOT IN ('done', 'cancelled')`
+  );
+  const n = row ? row.n : 0;
+  if (!n && !force) return;
+
+  const link = checklistSheetLink();
+  let text = `📋 วันนี้มีงานค้างในเช็คลิสต์ ${n} รายการ ดูรายละเอียดที่ชีทได้เลย หรือดูที่มิเกลเคยบอกไว้ในกลุ่ม UNFEST'26 / CR-Lab ก็ได้ค่ะ`;
+  if (link) text += `\n📋 ${link}`;
+  await push(groupId, text);
+}
+cron.schedule('0 15 * * *', withAlert('secondary midday pointer', sendSecondaryMidday), { timezone: 'Asia/Bangkok' });
+
+async function sendSecondaryEveningPointer({ force = false } = {}) {
+  const groupId = process.env.SECONDARY_GROUP_ID;
+  if (!groupId) return;
+
+  const link = checklistSheetLink();
+  let text = `📋 ใครมีงาน/สิ่งที่ต้องทำเพิ่ม บอกมิเกลในนี้ได้เลยนะคะ หรือไปอัปเดตในชีทตรงๆ ก็ได้ค่ะ กันตกหล่นค่ะ 🙏`;
+  if (link) text += `\n${link}`;
+  await push(groupId, text);
+}
+cron.schedule('0 22 * * *', withAlert('secondary evening pointer', sendSecondaryEveningPointer), { timezone: 'Asia/Bangkok' });
+
 // ---- Sheet sync: every 3 minutes, pick up any tasks the team added
 // directly in the UNFEST'26_CHECKLIST sheet instead of through LINE ----
 cron.schedule('*/3 * * * *', withAlert('sheet sync', () => sheetSync.run()), { timezone: 'Asia/Bangkok' });
@@ -764,6 +807,8 @@ module.exports = {
   sendMorningBriefing,
   sendAfternoonCheckin,
   sendEveningRecap,
+  sendSecondaryMidday,
+  sendSecondaryEveningPointer,
   checkMeetingReminders,
   checkOverdueTasks,
   setDryRun,
