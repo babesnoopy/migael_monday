@@ -1376,7 +1376,7 @@ app.get('/topics', (req, res) => {
       <td class="cat"><span class="pill" style="background:${color}22;color:${color};border:1px solid ${color}55">${escapeHtml(cat)}</span></td>
       <td class="title">${escapeHtml(t.title)}</td>
       <td class="summary">${escapeHtml(t.summary).replace(/\n/g, '<br>')}</td>
-      <td class="link">${t.reference_link ? `<a href="${escapeHtml(t.reference_link)}" target="_blank" rel="noopener">เปิดลิงก์</a>` : '-'}</td>
+      <td class="link">${t.reference_link ? t.reference_link.split(',').map((u) => u.trim()).filter(Boolean).map((u, i) => `<a href="${escapeHtml(u)}" target="_blank" rel="noopener">เปิดลิงก์${i > 0 ? ' ' + (i + 1) : ''}</a>`).join('<br>') : '-'}</td>
       <td class="people">${escapeHtml(t.participants) || '-'}</td>
       <td class="date">${escapeHtml(t.updated_at)}</td>
     </tr>`;
@@ -1601,6 +1601,22 @@ app.get('/debug/dedupe-pr-topic-2026-08-25', (req, res) => {
     db.run(`DELETE FROM topic_participants WHERE topic_id = ?`, [id]);
   }
   res.json({ ok: true, kept: keepId, deleted: deleteIds });
+});
+
+app.get('/debug/fix-dome-playback-links-2026-08-25', (req, res) => {
+  // The topic's summary always had BOTH Drive links (Sunyata + Lactobacillus),
+  // but reference_link only ever got the first one saved — the second link
+  // typed in the same message got silently dropped by the old single-link
+  // logic. Restoring both, comma-joined, now that /topics renders each
+  // comma-separated link as its own clickable button.
+  const topic = db.get(`SELECT * FROM topics WHERE title = 'DOME PLAYBACK — Immersive Dome x Physical Sensory'`);
+  if (!topic) return res.json({ ok: true, alreadyClean: true, reason: 'topic not found' });
+
+  const bothLinks = 'https://drive.google.com/drive/folders/1kglQh2KUc8esqZONM3Q1mvwHrd4u-Zr9?usp=drive_link, https://drive.google.com/drive/folders/1XjtJ1yrio1P2PX71PbtoC-Vlu6d9H5Os?usp=drive_link';
+  if (topic.reference_link === bothLinks) return res.json({ ok: true, alreadyClean: true });
+
+  db.run(`UPDATE topics SET reference_link = ? WHERE id = ?`, [bothLinks, topic.id]);
+  res.json({ ok: true, topicId: topic.id, reference_link: bothLinks });
 });
 
 app.post('/webhook', line.middleware(lineConfig), (req, res) => {
