@@ -39,7 +39,10 @@ async function scheduleBotForMeeting({ meetingUrl, joinAt, botName = 'มิเ�
         meeting_url: meetingUrl,
         bot_name: botName,
         join_at: new Date(joinAt).toISOString(),
-        // Recording only — no Recall-side transcript. See file header.
+        // Explicit, not left to default — Recall's own docs recommend
+        // this so the mp4 recording is guaranteed to exist by the time
+        // bot.done fires. No transcript provider here (see file header).
+        recording_config: { video_mixed_mp4: {} },
       }),
     });
     if (!res.ok) {
@@ -94,4 +97,14 @@ async function getBot(botId) {
   }
 }
 
-module.exports = { scheduleBotForMeeting, deleteScheduledBot, getBot };
+module.exports = { scheduleBotForMeeting, deleteScheduledBot, getBot, getRecordingDownloadUrl };
+
+/**
+ * Once a bot is 'done', pulls the pre-signed (short-lived — expires in
+ * hours, per Recall's docs) mp4 download URL out of its recordings.
+ * Returns null if there's genuinely no recording (e.g. bot never
+ * actually joined/recorded — fatal status, empty meeting, etc.).
+ */
+function getRecordingDownloadUrl(bot) {
+  return bot?.recordings?.[0]?.media_shortcuts?.video_mixed?.data?.download_url || null;
+}

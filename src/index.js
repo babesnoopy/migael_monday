@@ -1770,6 +1770,37 @@ app.post('/webhook/recall', express.raw({ type: 'application/json' }), (req, res
 
   db.run(`UPDATE events SET recall_bot_status = ? WHERE recall_bot_id = ?`, [statusCode, botId]);
   console.log(`[Recall webhook] bot=${botId} event=${event} status=${statusCode}`);
+
+  // Recording finished — pull the mp4 download link and send it back.
+  // FIX (2026-08-25 incident): the earlier version of this feature had
+  // no concept of "who this is actually for" — a real meeting reminder
+  // for a personal-chat TEST meeting got pushed into the real team
+  // group and tagged everyone, which is exactly what Babe was trying
+  // to avoid by testing in personal chat in the first place. Mirror the
+  // same personal-vs-team boundary used everywhere else: if the event's
+  // creator is an allowed personal-chat user, send the recording link
+  // there directly and privately; only fall back to the team group for
+  // events actually created by/for the team.
+  if (statusCode === 'done') {
+    (async () => {
+      const eventRow = db.get(`SELECT * FROM events WHERE recall_bot_id = ?`, [botId]);
+      if (!eventRow) return;
+      const bot = await recallApi.getBot(botId);
+      const downloadUrl = recallApi.getRecordingDownloadUrl(bot);
+      if (!downloadUrl) {
+        console.log(`[Recall webhook] bot=${botId} done but no recording found (fatal/empty meeting?)`);
+        return;
+      }
+      const allowedPersonal = (process.env.ALLOWED_PERSONAL_USER_IDS || process.env.BABE_USER_ID || '')
+        .split(',').map((s) => s.trim()).filter(Boolean);
+      const msg = `🎥 บันทึกประชุม "${eventRow.title}" เสร็จแล้วค่ะ (ลิงก์นี้ใช้ได้ไม่กี่ชั่วโมงนะคะ ดาวน์โหลดเก็บไว้ถ้าจะใช้ต่อ):\n${downloadUrl}`;
+      if (eventRow.created_by && allowedPersonal.includes(eventRow.created_by)) {
+        await client.pushMessage(eventRow.created_by, { type: 'text', text: msg }).catch((err) => console.error('[Recall webhook] push to personal failed:', err.message));
+      } else if (eventRow.group_id) {
+        await client.pushMessage(eventRow.group_id, { type: 'text', text: msg }).catch((err) => console.error('[Recall webhook] push to group failed:', err.message));
+      }
+    })().catch((err) => console.error('[Recall webhook] done-handling failed:', err.message));
+  }
 });
 
 app.post('/webhook', line.middleware(lineConfig), (req, res) => {
