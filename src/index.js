@@ -1540,6 +1540,13 @@ app.get('/debug/preview-evening', async (req, res) => {
   res.json(scheduler.getLastDryRunMessage());
   scheduler.setDryRun(false);
 });
+app.get('/debug/recent-events', (req, res) => {
+  const rows = db.all(
+    `SELECT id, title, start_time, meeting_link, recall_bot_id, recall_bot_status, created_at FROM events ORDER BY created_at DESC LIMIT 10`
+  );
+  res.json(rows);
+});
+
 app.get('/debug/groups', (req, res) => {
   const groups = db.all('SELECT * FROM line_groups ORDER BY created_at DESC');
   // group_name is always null (never populated anywhere) — show member
