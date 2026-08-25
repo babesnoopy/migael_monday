@@ -1,5 +1,23 @@
 // index.js — LINE webhook entrypoint
 require('dotenv').config();
+
+// SAFETY NET (added after a real incident, 2026-08-25): a single
+// uncaught error thrown inside an async Express route handler — with
+// no try/catch around it — becomes an unhandled promise rejection.
+// Node.js treats those as fatal by default and kills the ENTIRE
+// process, not just that one request. That's exactly what happened:
+// one bad date format in a brand-new route took the whole bot offline
+// and crash-looped it repeatedly. Every route should really have its
+// own try/catch (most now do), but this is the last line of defense —
+// log it and keep the process alive instead of taking everything down
+// over one broken request.
+process.on('unhandledRejection', (err) => {
+  console.error('[unhandledRejection] (kept process alive):', err);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException] (kept process alive):', err);
+});
+
 const fs = require('fs');
 const express = require('express');
 const line = require('@line/bot-sdk');
@@ -41,12 +59,13 @@ app.get('/debug/schedule-bot-for-event', async (req, res) => {
 // gives no context about which meeting it even is). The actual file
 // link is a separate route below, which is the one that redirects.
 app.get('/rec/:eventId', async (req, res) => {
-  const eventRow = db.get(`SELECT * FROM events WHERE id = ?`, [req.params.eventId]);
-  if (!eventRow?.recall_bot_id) {
-    return res.status(404).send('ไม่พบไฟล์บันทึกของนัดนี้ค่ะ');
-  }
-  const escapeHtml = (s) => String(s || '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
-  res.send(`<!DOCTYPE html>
+  try {
+    const eventRow = db.get(`SELECT * FROM events WHERE id = ?`, [req.params.eventId]);
+    if (!eventRow?.recall_bot_id) {
+      return res.status(404).send('ไม่พบไฟล์บันทึกของนัดนี้ค่ะ');
+    }
+    const escapeHtml = (s) => String(s || '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+    res.send(`<!DOCTYPE html>
 <html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(eventRow.title)} — บันทึกประชุม</title>
 <style>
@@ -61,19 +80,28 @@ app.get('/rec/:eventId', async (req, res) => {
   <div class="date">${escapeHtml(formatThaiDate(eventRow.start_time))}</div>
   <a class="download" href="/rec/${eventRow.id}/file">ดาวน์โหลดวิดีโอ</a>
 </body></html>`);
+  } catch (err) {
+    console.error('[/rec/:eventId] failed:', err.message);
+    res.status(500).send('เกิดข้อผิดพลาดค่ะ ลองใหม่อีกครั้ง หรือแจ้งเบ้บได้เลยค่ะ');
+  }
 });
 
 app.get('/rec/:eventId/file', async (req, res) => {
-  const eventRow = db.get(`SELECT * FROM events WHERE id = ?`, [req.params.eventId]);
-  if (!eventRow?.recall_bot_id) {
-    return res.status(404).send('ไม่พบไฟล์บันทึกของนัดนี้ค่ะ');
+  try {
+    const eventRow = db.get(`SELECT * FROM events WHERE id = ?`, [req.params.eventId]);
+    if (!eventRow?.recall_bot_id) {
+      return res.status(404).send('ไม่พบไฟล์บันทึกของนัดนี้ค่ะ');
+    }
+    const bot = await recallApi.getBot(eventRow.recall_bot_id);
+    const downloadUrl = recallApi.getRecordingDownloadUrl(bot);
+    if (!downloadUrl) {
+      return res.status(404).send('ยังไม่มีไฟล์บันทึกพร้อมใช้งานตอนนี้ค่ะ (อาจกำลังประมวลผลอยู่ ลองใหม่อีกสักครู่)');
+    }
+    res.redirect(302, downloadUrl);
+  } catch (err) {
+    console.error('[/rec/:eventId/file] failed:', err.message);
+    res.status(500).send('เกิดข้อผิดพลาดค่ะ ลองใหม่อีกครั้ง หรือแจ้งเบ้บได้เลยค่ะ');
   }
-  const bot = await recallApi.getBot(eventRow.recall_bot_id);
-  const downloadUrl = recallApi.getRecordingDownloadUrl(bot);
-  if (!downloadUrl) {
-    return res.status(404).send('ยังไม่มีไฟล์บันทึกพร้อมใช้งานตอนนี้ค่ะ (อาจกำลังประมวลผลอยู่ ลองใหม่อีกสักครู่)');
-  }
-  res.redirect(302, downloadUrl);
 });
 
 // Keep a short rolling window of recent messages per group in memory.
@@ -467,7 +495,23 @@ function buildOpenThreadSummary(session) {
 // the info was last updated, without relying on Claude to compute dates.
 function formatThaiDate(dbDateString) {
   if (!dbDateString) return null;
-  const d = new Date(dbDateString.replace(' ', 'T') + '+07:00');
+  // FIX (real incident 2026-08-25 — crashed the ENTIRE production
+  // process, not just one request): this only ever handled the
+  // space-separated, no-timezone format used by tasks.due_date (e.g.
+  // "2026-08-25 20:00:00"). events.start_time is stored as full ISO8601
+  // WITH a timezone already (from Google Calendar, e.g.
+  // "2026-08-25T20:00:00+07:00") — blindly appending '+07:00' again
+  // produced a double-timezone string ("...+07:00+07:00"), which
+  // Date() silently turns into an Invalid Date, and Intl.DateTimeFormat
+  // then throws RangeError on it. Detect which shape we got. Also never
+  // throw past this point — worst case, show the raw string rather than
+  // crash the whole server (this ran inside an async Express route with
+  // no try/catch, so the thrown error became an unhandled promise
+  // rejection that took the entire Node process down, not just a 500).
+  const alreadyHasTimezone = /(Z|[+-]\d{2}:?\d{2})$/.test(dbDateString);
+  const normalized = alreadyHasTimezone ? dbDateString : dbDateString.replace(' ', 'T') + '+07:00';
+  const d = new Date(normalized);
+  if (Number.isNaN(d.getTime())) return dbDateString;
   return new Intl.DateTimeFormat('th-TH', {
     timeZone: 'Asia/Bangkok',
     day: 'numeric',
