@@ -10,12 +10,13 @@
     "seed:calendars": "node seed-calendars.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "@line/bot-sdk": "^9.4.1",
     "@anthropic-ai/sdk": "^0.27.0",
-    "sql.js": "^1.10.3",
+    "@line/bot-sdk": "^9.4.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
     "googleapis": "^140.0.0",
     "node-cron": "^3.0.3",
-    "dotenv": "^16.4.5"
+    "sql.js": "^1.10.3",
+    "svix": "^2.0.0"
   }
 }

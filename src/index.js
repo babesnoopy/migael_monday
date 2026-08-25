@@ -1659,13 +1659,35 @@ app.get('/debug/fix-dome-playback-link-typo-2026-08-25', (req, res) => {
 // (no Recall-side transcript). Phase 1: just track status on the event
 // row so we can see it's working. Phase 2 (next): when status is "done",
 // fetch the recording and kick off Whisper transcription + summary.
-// NOTE: not yet verifying Recall's webhook signature (uses Svix) — low
-// risk for now since this only ever updates a status string, but should
-// be added before this endpoint does anything with side effects.
-app.post('/webhook/recall', express.json(), (req, res) => {
+//
+// Signature verification via Svix (the delivery service Recall.ai uses)
+// — needs the RAW request body (not JSON-parsed) to compute/compare the
+// signature correctly, so this route uses express.raw() instead of the
+// express.json() every other route gets, then parses JSON manually only
+// after verification passes.
+const { Webhook: SvixWebhook } = require('svix');
+app.post('/webhook/recall', express.raw({ type: 'application/json' }), (req, res) => {
   res.json({ ok: true }); // ack fast, same reasoning as the LINE webhook below
 
-  const { event, data } = req.body || {};
+  const secret = process.env.RECALL_WEBHOOK_SECRET;
+  if (!secret) {
+    console.error('[Recall webhook] RECALL_WEBHOOK_SECRET not set — refusing to process unverified webhook');
+    return;
+  }
+
+  let payload;
+  try {
+    const wh = new SvixWebhook(secret);
+    // req.body is a raw Buffer here (see express.raw() above) — Svix
+    // wants the exact bytes/string it originally signed, and needs
+    // svix-id/svix-timestamp/svix-signature headers to check against.
+    payload = wh.verify(req.body, req.headers);
+  } catch (err) {
+    console.error('[Recall webhook] signature verification failed:', err.message);
+    return;
+  }
+
+  const { event, data } = payload || {};
   const botId = data?.bot?.id;
   const statusCode = data?.data?.code;
   if (!botId || !statusCode) return;
