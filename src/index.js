@@ -1090,6 +1090,30 @@ async function handlePersonal(event, { text, imageBase64, imageMediaType }) {
 
   const relayGroupId = getDefaultRelayGroupId();
 
+  // FIX (real bug confirmed live 2026-08-25): personal chat never had
+  // any listening-mode session/continuity at all — openThread was
+  // hardcoded to null. Every message was interpreted from scratch with
+  // zero memory of what was just discussed. Confirmed this caused a
+  // real meeting request to get created THREE separate times: Babe
+  // asked to create a meeting, Migael asked who's attending, Babe
+  // answered "มีแค่เบ้บ" — but with no session, that reply had nothing
+  // to attach to and got misread as an unrelated question, so Babe
+  // re-asked twice more, each treated as a brand-new create_event call.
+  // Sessions are just keyed by an arbitrary string (not necessarily a
+  // real LINE group id — see groupState.js), so "personal:<userId>" is
+  // a safe, separate key per person's personal chat, distinct from any
+  // real team group's session state.
+  const personalSessionKey = `personal:${userId}`;
+  const personalSession = gs.getActiveSession(personalSessionKey);
+  const personalQuotedMessageId = event.message?.quotedMessageId;
+  const personalQuotedLink = personalQuotedMessageId
+    ? db.get(`SELECT ref_type, ref_id FROM quoted_message_links WHERE line_message_id = ?`, [personalQuotedMessageId])
+    : null;
+  const effectiveSessionForThread = personalQuotedLink
+    ? { linked_ref_type: personalQuotedLink.ref_type, linked_ref_id: personalQuotedLink.ref_id }
+    : personalSession;
+  const quotedLink = personalQuotedLink;
+
   // Remember an image sent here so a follow-up text instruction (sent as
   // a separate LINE message) can still reference "this image".
   if (imageBase64) {
@@ -1144,9 +1168,10 @@ async function handlePersonal(event, { text, imageBase64, imageMediaType }) {
     messageText: text,
     recentMessages: [],
     teamRoster: relayGroupId ? gs.getRoster(relayGroupId) : [],
-    openThread: null,
+    openThread: effectiveSessionForThread ? buildOpenThreadSummary(effectiveSessionForThread) : null,
     groupData: relayGroupId ? getGroupDataSnapshot(relayGroupId) : {},
     wasAddressed: true,
+    isQuoteReplyToMigael: !!quotedLink,
   });
   // Personal chat never had this logging at all — the group handler's
   // [Decision] line only fires on the group code path, so debugging any
@@ -1170,7 +1195,7 @@ async function handlePersonal(event, { text, imageBase64, imageMediaType }) {
   // actually persists — it was missing from this list, so the DB write
   // (which lives in applyDecision's log_topic branch) never ran even
   // though Claude's reply confidently said it was saved.
-  const isDelegatable = ['create_task', 'create_multiple_tasks', 'create_event', 'correct_event', 'log_topic'].includes(decision.intent);
+  const isDelegatable = ['create_task', 'create_multiple_tasks', 'create_event', 'correct_event', 'log_topic', 'add_detail_to_open_thread'].includes(decision.intent);
 
   // CHANGED (real incident): this used to relay EVERYTHING delegatable
   // to the team group automatically, assuming personal chat was only
@@ -1181,6 +1206,16 @@ async function handlePersonal(event, { text, imageBase64, imageMediaType }) {
   // message (matches the same "ส่งเข้ากลุ่ม" pattern used for image
   // relay) — default is personal-only, never auto-broadcast.
   const explicitRelayRequested = /ส่งเข้ากลุ่ม|แจ้งทีม|บอกทีม|บอกในกลุ่ม|เข้ากลุ่มทีม/i.test(text);
+
+  // Same session lifecycle as the group handler (see linkableIntents
+  // there) — only opens/reuses a session when something worth tracking
+  // across turns is happening, keyed to this person's own personal chat.
+  const linkableIntents = ['create_task', 'create_event', 'correct_event', 'log_topic', 'add_detail_to_open_thread'];
+  const sessionId = personalSession
+    ? personalSession.id
+    : linkableIntents.includes(decision.intent)
+      ? gs.openSession(personalSessionKey, userId)
+      : null;
 
   let groupOverrideReply = null;
   let relayed = false;
@@ -1194,7 +1229,8 @@ async function handlePersonal(event, { text, imageBase64, imageMediaType }) {
       groupId: relayGroupId,
       userId,
       userName: 'เบ้บ',
-      sessionId: null,
+      sessionId,
+      text,
     });
 
     if (explicitRelayRequested) {
@@ -1209,6 +1245,10 @@ async function handlePersonal(event, { text, imageBase64, imageMediaType }) {
         });
       }
     }
+  }
+
+  if (sessionId && decision.intent === 'none') {
+    gs.closeSession(sessionId, 'topic_changed');
   }
 
   const personalReply = decision.reply_message
@@ -1540,6 +1580,24 @@ app.get('/debug/preview-evening', async (req, res) => {
   res.json(scheduler.getLastDryRunMessage());
   scheduler.setDryRun(false);
 });
+app.get('/debug/cleanup-duplicate-test-meetings-2026-08-25', async (req, res) => {
+  // Cleans up the 3 duplicate "ทดสอบระบบ" meetings created by the
+  // personal-chat session-continuity bug (see handlePersonal comments) —
+  // keeps the most recent one, cancels the other 2 Recall bots + deletes
+  // their Calendar events + local rows.
+  const dupIds = ['e95addef-050d-4c11-84dd-a7c1f83f3849', 'd41840d4-023d-4838-a85c-8d44392a1f48'];
+  const results = [];
+  for (const id of dupIds) {
+    const row = db.get(`SELECT * FROM events WHERE id = ?`, [id]);
+    if (!row) { results.push({ id, skipped: true }); continue; }
+    if (row.recall_bot_id) await recallApi.deleteScheduledBot(row.recall_bot_id);
+    if (row.google_event_id && row.calendar_id) await calendarApi.deleteEvent(row.calendar_id, row.google_event_id);
+    db.run(`DELETE FROM events WHERE id = ?`, [id]);
+    results.push({ id, cleaned: true });
+  }
+  res.json({ ok: true, results });
+});
+
 app.get('/debug/recent-events', (req, res) => {
   const rows = db.all(
     `SELECT id, title, start_time, meeting_link, recall_bot_id, recall_bot_status, created_at FROM events ORDER BY created_at DESC LIMIT 10`
