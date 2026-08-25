@@ -24,6 +24,25 @@ const app = express();
 app.use('/reports', express.static(require('path').join(__dirname, '..', 'data', 'reports')));
 app.use('/uploads', express.static(UPLOADS_DIR));
 
+// Short, permanent link for a meeting's recording — the real S3
+// download_url from Recall expires after ~5 hours, so instead of
+// sending that raw URL out, send THIS one. It fetches a fresh
+// download_url from Recall every time it's visited and redirects,
+// so the link never goes stale no matter how long after the meeting
+// someone opens it.
+app.get('/rec/:eventId', async (req, res) => {
+  const eventRow = db.get(`SELECT * FROM events WHERE id = ?`, [req.params.eventId]);
+  if (!eventRow?.recall_bot_id) {
+    return res.status(404).send('ไม่พบไฟล์บันทึกของนัดนี้ค่ะ');
+  }
+  const bot = await recallApi.getBot(eventRow.recall_bot_id);
+  const downloadUrl = recallApi.getRecordingDownloadUrl(bot);
+  if (!downloadUrl) {
+    return res.status(404).send('ยังไม่มีไฟล์บันทึกพร้อมใช้งานตอนนี้ค่ะ (อาจกำลังประมวลผลอยู่ ลองใหม่อีกสักครู่)');
+  }
+  res.redirect(302, downloadUrl);
+});
+
 // Keep a short rolling window of recent messages per group in memory.
 // This is just for "listening mode" context — the durable record lives
 // in tasks/events once Migael has extracted something.
@@ -1819,7 +1838,8 @@ app.post('/webhook/recall', express.raw({ type: 'application/json' }), (req, res
       }
       const allowedPersonal = (process.env.ALLOWED_PERSONAL_USER_IDS || process.env.BABE_USER_ID || '')
         .split(',').map((s) => s.trim()).filter(Boolean);
-      const msg = `🎥 บันทึกประชุม "${eventRow.title}" เสร็จแล้วค่ะ (ลิงก์นี้ใช้ได้ไม่กี่ชั่วโมงนะคะ ดาวน์โหลดเก็บไว้ถ้าจะใช้ต่อ):\n${downloadUrl}`;
+      const shortLink = `${(process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '')}/rec/${eventRow.id}`;
+      const msg = `🎥 บันทึกประชุม "${eventRow.title}" เสร็จแล้วค่ะ:\n${shortLink}`;
       if (eventRow.created_by && allowedPersonal.includes(eventRow.created_by)) {
         await client.pushMessage(eventRow.created_by, { type: 'text', text: msg }).catch((err) => console.error('[Recall webhook] push to personal failed:', err.message));
       } else if (eventRow.group_id) {
