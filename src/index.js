@@ -1619,6 +1619,25 @@ app.get('/debug/fix-dome-playback-links-2026-08-25', (req, res) => {
   res.json({ ok: true, topicId: topic.id, reference_link: bothLinks });
 });
 
+app.get('/debug/fix-dome-playback-link-typo-2026-08-25', (req, res) => {
+  // The "correct" link saved by the previous cleanup was itself wrong —
+  // 1kgl... vs the real 1kgI... (lowercase L vs capital I, visually
+  // identical in this font, confirmed against the exact text Babe
+  // pasted straight from the original source). Fixing to the real ID.
+  const topic = db.get(`SELECT * FROM topics WHERE title = 'DOME PLAYBACK — Immersive Dome x Physical Sensory'`);
+  if (!topic) return res.json({ ok: true, alreadyClean: true, reason: 'topic not found' });
+
+  const correctLinks = 'https://drive.google.com/drive/folders/1kgIQh2KUc8esqZONM3Q1mvwHrd4u-Zr9?usp=drive_link, https://drive.google.com/drive/folders/1XjtJ1yrio1P2PX71PbtoC-Vlu6d9H5Os?usp=drive_link';
+  db.run(`UPDATE topics SET reference_link = ? WHERE id = ?`, [correctLinks, topic.id]);
+  // The summary text has the same typo'd ID baked in too — fix both
+  // spots so search/recap replies show the correct link as well, not
+  // just the button.
+  const fixedSummary = (topic.summary || '').split('1kglQh2KUc8esqZONM3Q1mvwHrd4u-Zr9').join('1kgIQh2KUc8esqZONM3Q1mvwHrd4u-Zr9');
+  db.run(`UPDATE topics SET summary = ? WHERE id = ?`, [fixedSummary, topic.id]);
+
+  res.json({ ok: true, topicId: topic.id, reference_link: correctLinks });
+});
+
 app.post('/webhook', line.middleware(lineConfig), (req, res) => {
   // Respond to LINE immediately, BEFORE doing any slow work (Claude +
   // Google Calendar calls can take several seconds). This was the real
