@@ -541,7 +541,7 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId, t
     'ติดต่อ / ติดตาม': 'UNCRLAB',
   };
 
-  async function createCalendarEvent({ title, startTime, endTime, calendarName, isMeeting, isOnsite, attendeeEmails, attendeeNames, allDay }) {
+  async function createCalendarEvent({ title, startTime, endTime, calendarName, isMeeting, isOnsite, attendeeEmails, attendeeNames, allDay, skipTeamReminder }) {
     const mappedName = CATEGORY_TO_CALENDAR[calendarName] || calendarName;
     let calendarRow = null;
     if (mappedName) {
@@ -564,9 +564,9 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId, t
 
     const id = randomUUID();
     db.run(
-      `INSERT INTO events (id, title, start_time, meeting_link, calendar_id, google_event_id, group_id, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, title || '(untitled)', startTime, created?.meetLink || null, calendarRow?.id || null, created?.id || null, groupId, userId]
+      `INSERT INTO events (id, title, start_time, meeting_link, calendar_id, google_event_id, group_id, created_by, skip_team_reminder)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, title || '(untitled)', startTime, created?.meetLink || null, calendarRow?.id || null, created?.id || null, groupId, userId, skipTeamReminder ? 1 : 0]
     );
     linkAttendees(id, attendeeNames);
 
@@ -787,6 +787,7 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId, t
       isOnsite,
       attendeeEmails: ex.attendee_emails,
       attendeeNames: ex.attendee_names,
+      skipTeamReminder: ex.skip_team_reminder === true,
     });
     gs.linkSession(sessionId, 'event', id);
 

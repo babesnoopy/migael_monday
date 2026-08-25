@@ -111,6 +111,14 @@ async function init() {
   if (!eventColNames.includes('recall_bot_status')) {
     db.run(`ALTER TABLE events ADD COLUMN recall_bot_status TEXT`);
   }
+  // Lets a specific meeting opt out of the normal 30/10-min-before team
+  // group reminder (checkMeetingReminders in scheduler.js) — e.g. a
+  // personal test meeting nobody on the team needs to know about.
+  // Default 0 (reminder as normal) — most real meetings SHOULD still
+  // notify the team; this is only for the explicit exception.
+  if (!eventColNames.includes('skip_team_reminder')) {
+    db.run(`ALTER TABLE events ADD COLUMN skip_team_reminder INTEGER DEFAULT 0`);
+  }
   persist();
 
   return db;

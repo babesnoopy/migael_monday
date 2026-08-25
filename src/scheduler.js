@@ -433,7 +433,8 @@ async function checkMeetingReminders() {
     const events = db.all(
       `SELECT * FROM events
        WHERE datetime(start_time) BETWEEN datetime('now', '+${window - 2} minutes')
-                                       AND datetime('now', '+${window + 2} minutes')`
+                                       AND datetime('now', '+${window + 2} minutes')
+         AND (skip_team_reminder IS NULL OR skip_team_reminder = 0)`
     );
 
     const toRemind = events.filter((e) => !db.get(
