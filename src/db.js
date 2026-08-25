@@ -98,6 +98,19 @@ async function init() {
   if (!topicColNames.includes('category')) {
     db.run(`ALTER TABLE topics ADD COLUMN category TEXT`);
   }
+
+  // Recall.ai bot tracking (2026-08-25) — an online meeting event can
+  // have a bot scheduled to join, record, and (later) get transcribed.
+  // Nullable/absent for onsite events and any event created before this
+  // feature existed.
+  const eventCols = db.exec(`PRAGMA table_info(events)`);
+  const eventColNames = eventCols[0]?.values?.map((row) => row[1]) || [];
+  if (!eventColNames.includes('recall_bot_id')) {
+    db.run(`ALTER TABLE events ADD COLUMN recall_bot_id TEXT`);
+  }
+  if (!eventColNames.includes('recall_bot_status')) {
+    db.run(`ALTER TABLE events ADD COLUMN recall_bot_status TEXT`);
+  }
   persist();
 
   return db;

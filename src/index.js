@@ -8,6 +8,7 @@ const brain = require('./brain');
 const gs = require('./groupState');
 const calendarApi = require('./calendar');
 const driveApi = require('./drive');
+const recallApi = require('./recall');
 const { randomUUID } = require('crypto');
 require('./scheduler'); // starts cron jobs once db is ready (see scheduler.js)
 
@@ -568,6 +569,21 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId, t
       [id, title || '(untitled)', startTime, created?.meetLink || null, calendarRow?.id || null, created?.id || null, groupId, userId]
     );
     linkAttendees(id, attendeeNames);
+
+    // Send มิเกล's Recall.ai bot to sit in on real online meetings
+    // automatically — no one has to remember to record/transcribe
+    // manually. Onsite meetings have no Meet link (isOnsite skips
+    // createMeetLink above) so this naturally only fires for real
+    // video calls. Fire-and-forget: never let a Recall scheduling
+    // hiccup block the actual Calendar event from being created.
+    if (isMeeting && !isOnsite && created?.meetLink) {
+      recallApi.scheduleBotForMeeting({ meetingUrl: created.meetLink, joinAt: startTime })
+        .then((bot) => {
+          if (bot?.id) db.run(`UPDATE events SET recall_bot_id = ?, recall_bot_status = ? WHERE id = ?`, [bot.id, bot.status, id]);
+        })
+        .catch((err) => console.error('[Recall] schedule failed for event', id, err.message));
+    }
+
     return { id, meetLink: created?.meetLink || null };
   }
 
@@ -1636,6 +1652,26 @@ app.get('/debug/fix-dome-playback-link-typo-2026-08-25', (req, res) => {
   db.run(`UPDATE topics SET summary = ? WHERE id = ?`, [fixedSummary, topic.id]);
 
   res.json({ ok: true, topicId: topic.id, reference_link: correctLinks });
+});
+
+// Recall.ai bot status updates (bot.joining_call, bot.in_call_recording,
+// bot.done, bot.fatal, etc.) — see src/recall.js for why we only record
+// (no Recall-side transcript). Phase 1: just track status on the event
+// row so we can see it's working. Phase 2 (next): when status is "done",
+// fetch the recording and kick off Whisper transcription + summary.
+// NOTE: not yet verifying Recall's webhook signature (uses Svix) — low
+// risk for now since this only ever updates a status string, but should
+// be added before this endpoint does anything with side effects.
+app.post('/webhook/recall', express.json(), (req, res) => {
+  res.json({ ok: true }); // ack fast, same reasoning as the LINE webhook below
+
+  const { event, data } = req.body || {};
+  const botId = data?.bot?.id;
+  const statusCode = data?.data?.code;
+  if (!botId || !statusCode) return;
+
+  db.run(`UPDATE events SET recall_bot_status = ? WHERE recall_bot_id = ?`, [statusCode, botId]);
+  console.log(`[Recall webhook] bot=${botId} event=${event} status=${statusCode}`);
 });
 
 app.post('/webhook', line.middleware(lineConfig), (req, res) => {
