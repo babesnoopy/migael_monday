@@ -1548,28 +1548,43 @@ app.get('/debug/groups', (req, res) => {
 // as part of the /debug/* access-protection cleanup (outstanding item).
 app.get('/debug/fix-sqnxr-topic-2026-08-25', (req, res) => {
   const marker = 'Playback dome ให้พี่เนส';
-  const topic = db.get(
-    `SELECT * FROM topics WHERE title = 'สรุปประชุม SQNXR 21 AUG' AND summary LIKE ?`,
-    [`%${marker}%`]
-  );
+  const staleLinkMarker = '1kgIQh2KUc8esqZONM3Q1mvwHrd4u-Zr9';
+  const topic = db.get(`SELECT * FROM topics WHERE title = 'สรุปประชุม SQNXR 21 AUG'`);
   if (!topic) {
+    return res.json({ ok: true, alreadyClean: true, reason: 'topic not found' });
+  }
+
+  const needsSummarySplit = topic.summary && topic.summary.includes(marker);
+  const needsLinkClear = topic.reference_link && topic.reference_link.includes(staleLinkMarker);
+  if (!needsSummarySplit && !needsLinkClear) {
     return res.json({ ok: true, alreadyClean: true });
   }
 
-  const cleanedSqnxr = `สรุปประชุมความร่วมมือ UNFEST'26 × CLOUD11 × SQNXR — ตกลงทำสัญญา 2 รูปแบบ (Commercial + Non-commercial), โซน Dome เวลา 18:00-22:00 น. (ฉาย Visual 10-15 นาที/รอบ, 18+ หลัง 20:00), Live DJ/Party 22:00-24:00 น., ระบบจองรอบผ่านแอป (60 คน/รอบ สรุปชัดภายใน 3/9), พื้นที่โดม/สวนห้ามบูธ Hard Sale (โลโก้สปอนเซอร์ฉายใน Dome หรือประชาสัมพันธ์ชั้น 6 ได้), การแถลงข่าวแยกราชการ/สื่อหลัก, Talk/Knowledge Sharing อาจปรับเป็นเสวนาเวทีหลัก (World Topic 12/?) หรือบันทึกเทปล่วงหน้า, ส่ง Template visual + สเปค Dome ให้ทีมศิลปินแล้ว, คุณวิวอยากจ้าง staff ทีมเราช่วยดูแล Dome (รอสรุปดีเทล), เซ็นเรียบร้อย — Paid Media Budget: 95,000-125,000 THB แบ่งเป็น Media/News Page 24% (20,000-30,000 THB), Boost Post 12% (15,000+ boost 3 โพสต์ × 5,000 บาท/โพสต์), Paid KOLs 64% (60,000-80,000 THB แบ่ง Nano/Micro/Macro ตามอัตราส่วน 3:1:1) — เบ้บได้สร้างโฟลเดอร์ไดรฟ์ไว้รวมไฟล์จาก co-curate — พี่กบได้รับมอบหมายให้ทำการบ้าน PR — CFO คน Lotus กำลังเพ่งเล็งโปรเจกต์นี้ว่ารอดไม่รอด`;
+  let newPrTopicId = null;
+  if (needsSummarySplit) {
+    const cleanedSqnxr = `สรุปประชุมความร่วมมือ UNFEST'26 × CLOUD11 × SQNXR — ตกลงทำสัญญา 2 รูปแบบ (Commercial + Non-commercial), โซน Dome เวลา 18:00-22:00 น. (ฉาย Visual 10-15 นาที/รอบ, 18+ หลัง 20:00), Live DJ/Party 22:00-24:00 น., ระบบจองรอบผ่านแอป (60 คน/รอบ สรุปชัดภายใน 3/9), พื้นที่โดม/สวนห้ามบูธ Hard Sale (โลโก้สปอนเซอร์ฉายใน Dome หรือประชาสัมพันธ์ชั้น 6 ได้), การแถลงข่าวแยกราชการ/สื่อหลัก, Talk/Knowledge Sharing อาจปรับเป็นเสวนาเวทีหลัก (World Topic 12/?) หรือบันทึกเทปล่วงหน้า, ส่ง Template visual + สเปค Dome ให้ทีมศิลปินแล้ว, คุณวิวอยากจ้าง staff ทีมเราช่วยดูแล Dome (รอสรุปดีเทล), เซ็นเรียบร้อย — Paid Media Budget: 95,000-125,000 THB แบ่งเป็น Media/News Page 24% (20,000-30,000 THB), Boost Post 12% (15,000+ boost 3 โพสต์ × 5,000 บาท/โพสต์), Paid KOLs 64% (60,000-80,000 THB แบ่ง Nano/Micro/Macro ตามอัตราส่วน 3:1:1) — เบ้บได้สร้างโฟลเดอร์ไดรฟ์ไว้รวมไฟล์จาก co-curate — พี่กบได้รับมอบหมายให้ทำการบ้าน PR — CFO คน Lotus กำลังเพ่งเล็งโปรเจกต์นี้ว่ารอดไม่รอด`;
 
-  const prTeamSummary = `อัปเดตจากทีม PR (แยกออกมาจาก "สรุปประชุม SQNXR 21 AUG" เพราะเป็นคนละเรื่อง — เดิมถูกบันทึกปนกันไปเพราะ session ค้าง): มี yoga techno ในตอนเช้า (เพิ่มเติมจากคุยกับพี่น้ต), Immersive Run club ระยะทาง, คลิป 15 วิ ต้องน่าสนใจตั้งแต่ 3 วิแรก เลือก highlight กิจกรรม/ศิลปิน (พี่เจ, พี่นัท), Highlight เปิดตัว 25% ให้คนเห็นภาพรวมคร่าวๆ ก่อน ยังไม่ต้องเป็น headline เน้นให้ Interesting, วันที่ 9 ยังไม่ชัวร์ว่าโดมจะเสดหรือเปล่า, ตั้งแต่วันที่ 3 เป็นต้นไปเข้าสู่ช่วง Set up — ทีม PR ขอวันสรุปการเซ็ตอัพในแต่ละพื้นที่ เพื่อจะได้ลงรูปจริงของหน้างาน`;
+    const prTeamSummary = `อัปเดตจากทีม PR (แยกออกมาจาก "สรุปประชุม SQNXR 21 AUG" เพราะเป็นคนละเรื่อง — เดิมถูกบันทึกปนกันไปเพราะ session ค้าง): มี yoga techno ในตอนเช้า (เพิ่มเติมจากคุยกับพี่น้ต), Immersive Run club ระยะทาง, คลิป 15 วิ ต้องน่าสนใจตั้งแต่ 3 วิแรก เลือก highlight กิจกรรม/ศิลปิน (พี่เจ, พี่นัท), Highlight เปิดตัว 25% ให้คนเห็นภาพรวมคร่าวๆ ก่อน ยังไม่ต้องเป็น headline เน้นให้ Interesting, วันที่ 9 ยังไม่ชัวร์ว่าโดมจะเสดหรือเปล่า, ตั้งแต่วันที่ 3 เป็นต้นไปเข้าสู่ช่วง Set up — ทีม PR ขอวันสรุปการเซ็ตอัพในแต่ละพื้นที่ เพื่อจะได้ลงรูปจริงของหน้างาน`;
 
-  db.run(`UPDATE topics SET summary = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [cleanedSqnxr, topic.id]);
+    db.run(`UPDATE topics SET summary = ? WHERE id = ?`, [cleanedSqnxr, topic.id]);
 
-  const newId = randomUUID();
-  db.run(
-    `INSERT INTO topics (id, group_id, title, summary, reference_link, created_by, category, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [newId, topic.group_id, 'อัปเดตทีม PR — Highlight Clip & กำหนดการ Set up', prTeamSummary, null, topic.created_by, 'UNFEST', 'open']
-  );
+    newPrTopicId = randomUUID();
+    db.run(
+      `INSERT INTO topics (id, group_id, title, summary, reference_link, created_by, category, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [newPrTopicId, topic.group_id, 'อัปเดตทีม PR — Highlight Clip & กำหนดการ Set up', prTeamSummary, null, topic.created_by, 'UNFEST', 'open']
+    );
+  }
 
-  res.json({ ok: true, cleanedTopicId: topic.id, newPrTopicId: newId });
+  if (needsLinkClear) {
+    // These Dome Playback links already live correctly on their own
+    // dedicated topic ("DOME PLAYBACK — Immersive Dome x Physical
+    // Sensory") — clearing the duplicate here, not moving it anywhere.
+    db.run(`UPDATE topics SET reference_link = NULL WHERE id = ?`, [topic.id]);
+  }
+  db.run(`UPDATE topics SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [topic.id]);
+
+  res.json({ ok: true, cleanedTopicId: topic.id, newPrTopicId, linkCleared: needsLinkClear });
 });
 
 app.post('/webhook', line.middleware(lineConfig), (req, res) => {
