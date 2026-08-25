@@ -1618,6 +1618,10 @@ app.get('/debug/recent-events', (req, res) => {
   res.json(rows);
 });
 
+app.get('/debug/dev-mode-status', (req, res) => {
+  res.json({ devMode: gs.isDevMode(), broadcastTarget: gs.resolveBroadcastTarget(gs.getPrimaryGroupId()) });
+});
+
 app.get('/debug/groups', (req, res) => {
   const groups = db.all('SELECT * FROM line_groups ORDER BY created_at DESC');
   // group_name is always null (never populated anywhere) — show member
