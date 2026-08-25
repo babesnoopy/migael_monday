@@ -24,6 +24,17 @@ const app = express();
 app.use('/reports', express.static(require('path').join(__dirname, '..', 'data', 'reports')));
 app.use('/uploads', express.static(UPLOADS_DIR));
 
+app.get('/debug/schedule-bot-for-event', async (req, res) => {
+  const id = req.query.id;
+  if (!id) return res.status(400).json({ ok: false, error: 'missing id query param' });
+  const eventRow = db.get(`SELECT * FROM events WHERE id = ?`, [id]);
+  if (!eventRow) return res.status(404).json({ ok: false, error: 'event not found' });
+  if (!eventRow.meeting_link) return res.status(400).json({ ok: false, error: 'event has no meeting_link' });
+  const bot = await recallApi.scheduleBotForMeeting({ meetingUrl: eventRow.meeting_link, joinAt: eventRow.start_time });
+  if (bot?.id) db.run(`UPDATE events SET recall_bot_id = ?, recall_bot_status = ? WHERE id = ?`, [bot.id, bot.status, id]);
+  res.json({ ok: !!bot, bot });
+});
+
 // Short, permanent link for a meeting's recording — the real S3
 // download_url from Recall expires after ~5 hours, so instead of
 // sending that raw URL out, send THIS one. It fetches a fresh
