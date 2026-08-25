@@ -934,6 +934,24 @@ async function applyDecision({ decision, groupId, userId, userName, sessionId, t
       return `เจอ action item จากโน้ตนี้ ${ex.proposed_tasks.length} อันค่ะ อยากให้สร้างเป็นงานเลยมั้ยคะ:\n${lines.join('\n')}\n\nพิมพ์ "ใช่" เพื่อสร้างทั้งหมด หรือบอกว่าอยากตัดอันไหนออกก็ได้ค่ะ`;
     }
 
+    // FIX (real bug confirmed live 2026-08-24/25): a topic-linked
+    // listening session used to stay open indefinitely — only closing
+    // once a later message got judged totally unrelated (intent=none).
+    // That let a stale-but-still-"open" session quietly pull in
+    // completely unrelated later messages (a repeated Dome Playback
+    // link share, then separately a PR-team note) into an old,
+    // unrelated meeting-summary topic just because its session
+    // happened to still be open, even though the semantic "does this
+    // really match" prompt rule said not to. Topics don't need
+    // turn-by-turn session continuity the way tasks/events do — genuine
+    // continuations are still caught either by a real LINE reply/quote
+    // to Migael's own message (quotedLink, checked earlier and always
+    // wins) or by matching an existing topic's meaning against the
+    // full topicsBlock list Claude already sees every time. Closing
+    // here removes the sticky "openThread" pull entirely once a topic
+    // write is done, so the next unrelated message is evaluated fresh.
+    if (sessionId) gs.closeSession(sessionId, 'topic_logged');
+
     return decision.reply_message || `บันทึกไว้แล้วค่ะ 📌 "${ex.topic_title}"`;
   }
 
@@ -1519,6 +1537,39 @@ app.get('/debug/groups', (req, res) => {
     ).map((m) => m.display_name),
   }));
   res.json(withMembers);
+});
+
+// ONE-TIME data-cleanup endpoint (2026-08-25) — splits real content that
+// got merged into "สรุปประชุม SQNXR 21 AUG" by the openThread bug fixed
+// above (see the log_topic session-close comment). Idempotent: checks
+// for the specific polluted marker text before doing anything, so it's
+// safe to hit more than once and safe to leave deployed — it becomes a
+// no-op forever once the one real fix has run. Should still be deleted
+// as part of the /debug/* access-protection cleanup (outstanding item).
+app.get('/debug/fix-sqnxr-topic-2026-08-25', (req, res) => {
+  const marker = 'Playback dome ให้พี่เนส';
+  const topic = db.get(
+    `SELECT * FROM topics WHERE title = 'สรุปประชุม SQNXR 21 AUG' AND summary LIKE ?`,
+    [`%${marker}%`]
+  );
+  if (!topic) {
+    return res.json({ ok: true, alreadyClean: true });
+  }
+
+  const cleanedSqnxr = `สรุปประชุมความร่วมมือ UNFEST'26 × CLOUD11 × SQNXR — ตกลงทำสัญญา 2 รูปแบบ (Commercial + Non-commercial), โซน Dome เวลา 18:00-22:00 น. (ฉาย Visual 10-15 นาที/รอบ, 18+ หลัง 20:00), Live DJ/Party 22:00-24:00 น., ระบบจองรอบผ่านแอป (60 คน/รอบ สรุปชัดภายใน 3/9), พื้นที่โดม/สวนห้ามบูธ Hard Sale (โลโก้สปอนเซอร์ฉายใน Dome หรือประชาสัมพันธ์ชั้น 6 ได้), การแถลงข่าวแยกราชการ/สื่อหลัก, Talk/Knowledge Sharing อาจปรับเป็นเสวนาเวทีหลัก (World Topic 12/?) หรือบันทึกเทปล่วงหน้า, ส่ง Template visual + สเปค Dome ให้ทีมศิลปินแล้ว, คุณวิวอยากจ้าง staff ทีมเราช่วยดูแล Dome (รอสรุปดีเทล), เซ็นเรียบร้อย — Paid Media Budget: 95,000-125,000 THB แบ่งเป็น Media/News Page 24% (20,000-30,000 THB), Boost Post 12% (15,000+ boost 3 โพสต์ × 5,000 บาท/โพสต์), Paid KOLs 64% (60,000-80,000 THB แบ่ง Nano/Micro/Macro ตามอัตราส่วน 3:1:1) — เบ้บได้สร้างโฟลเดอร์ไดรฟ์ไว้รวมไฟล์จาก co-curate — พี่กบได้รับมอบหมายให้ทำการบ้าน PR — CFO คน Lotus กำลังเพ่งเล็งโปรเจกต์นี้ว่ารอดไม่รอด`;
+
+  const prTeamSummary = `อัปเดตจากทีม PR (แยกออกมาจาก "สรุปประชุม SQNXR 21 AUG" เพราะเป็นคนละเรื่อง — เดิมถูกบันทึกปนกันไปเพราะ session ค้าง): มี yoga techno ในตอนเช้า (เพิ่มเติมจากคุยกับพี่น้ต), Immersive Run club ระยะทาง, คลิป 15 วิ ต้องน่าสนใจตั้งแต่ 3 วิแรก เลือก highlight กิจกรรม/ศิลปิน (พี่เจ, พี่นัท), Highlight เปิดตัว 25% ให้คนเห็นภาพรวมคร่าวๆ ก่อน ยังไม่ต้องเป็น headline เน้นให้ Interesting, วันที่ 9 ยังไม่ชัวร์ว่าโดมจะเสดหรือเปล่า, ตั้งแต่วันที่ 3 เป็นต้นไปเข้าสู่ช่วง Set up — ทีม PR ขอวันสรุปการเซ็ตอัพในแต่ละพื้นที่ เพื่อจะได้ลงรูปจริงของหน้างาน`;
+
+  db.run(`UPDATE topics SET summary = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [cleanedSqnxr, topic.id]);
+
+  const newId = randomUUID();
+  db.run(
+    `INSERT INTO topics (id, group_id, title, summary, reference_link, created_by, category, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [newId, topic.group_id, 'อัปเดตทีม PR — Highlight Clip & กำหนดการ Set up', prTeamSummary, null, topic.created_by, 'UNFEST', 'open']
+  );
+
+  res.json({ ok: true, cleanedTopicId: topic.id, newPrTopicId: newId });
 });
 
 app.post('/webhook', line.middleware(lineConfig), (req, res) => {
