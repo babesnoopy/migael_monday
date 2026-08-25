@@ -35,13 +35,35 @@ app.get('/debug/schedule-bot-for-event', async (req, res) => {
   res.json({ ok: !!bot, bot });
 });
 
-// Short, permanent link for a meeting's recording — the real S3
-// download_url from Recall expires after ~5 hours, so instead of
-// sending that raw URL out, send THIS one. It fetches a fresh
-// download_url from Recall every time it's visited and redirects,
-// so the link never goes stale no matter how long after the meeting
-// someone opens it.
+// Landing page for a meeting's recording — shows the meeting info with
+// a real "download" button/link, instead of the LINE link itself
+// triggering an instant automatic download (confusing on mobile, and
+// gives no context about which meeting it even is). The actual file
+// link is a separate route below, which is the one that redirects.
 app.get('/rec/:eventId', async (req, res) => {
+  const eventRow = db.get(`SELECT * FROM events WHERE id = ?`, [req.params.eventId]);
+  if (!eventRow?.recall_bot_id) {
+    return res.status(404).send('ไม่พบไฟล์บันทึกของนัดนี้ค่ะ');
+  }
+  const escapeHtml = (s) => String(s || '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+  res.send(`<!DOCTYPE html>
+<html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(eventRow.title)} — บันทึกประชุม</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 480px; margin: 60px auto; padding: 0 20px; color: #1a1a1a; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .date { color: #666; margin-bottom: 24px; }
+  a.download { display: inline-block; background: #06c755; color: white; text-decoration: none; padding: 14px 28px; border-radius: 8px; font-weight: 600; }
+  a.download:hover { background: #05a648; }
+</style></head>
+<body>
+  <h1>🎥 ${escapeHtml(eventRow.title)}</h1>
+  <div class="date">${escapeHtml(formatThaiDate(eventRow.start_time))}</div>
+  <a class="download" href="/rec/${eventRow.id}/file">ดาวน์โหลดวิดีโอ</a>
+</body></html>`);
+});
+
+app.get('/rec/:eventId/file', async (req, res) => {
   const eventRow = db.get(`SELECT * FROM events WHERE id = ?`, [req.params.eventId]);
   if (!eventRow?.recall_bot_id) {
     return res.status(404).send('ไม่พบไฟล์บันทึกของนัดนี้ค่ะ');
