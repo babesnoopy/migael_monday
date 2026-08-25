@@ -1580,6 +1580,17 @@ app.get('/debug/preview-evening', async (req, res) => {
   res.json(scheduler.getLastDryRunMessage());
   scheduler.setDryRun(false);
 });
+app.get('/debug/cancel-event', async (req, res) => {
+  const id = req.query.id;
+  if (!id) return res.status(400).json({ ok: false, error: 'missing id query param' });
+  const row = db.get(`SELECT * FROM events WHERE id = ?`, [id]);
+  if (!row) return res.json({ ok: true, skipped: true, reason: 'not found' });
+  if (row.recall_bot_id) await recallApi.deleteScheduledBot(row.recall_bot_id);
+  if (row.google_event_id && row.calendar_id) await calendarApi.deleteEvent(row.calendar_id, row.google_event_id);
+  db.run(`DELETE FROM events WHERE id = ?`, [id]);
+  res.json({ ok: true, cancelled: id });
+});
+
 app.get('/debug/cleanup-duplicate-test-meetings-2026-08-25', async (req, res) => {
   // Cleans up the 3 duplicate "ทดสอบระบบ" meetings created by the
   // personal-chat session-continuity bug (see handlePersonal comments) —
