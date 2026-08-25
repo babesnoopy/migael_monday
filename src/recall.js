@@ -24,7 +24,7 @@ function getApiKey() {
  * to guarantee an on-time join; if the meeting is sooner than that, this
  * still works but behaves like an ad-hoc (near-immediate) join instead.
  */
-async function scheduleBotForMeeting({ meetingUrl, joinAt, botName = 'มิเกล 🤖' }) {
+async function scheduleBotForMeeting({ meetingUrl, joinAt, botName = 'Migael' }) {
   const apiKey = getApiKey();
   if (!apiKey || !meetingUrl) return null;
 
