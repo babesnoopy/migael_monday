@@ -93,6 +93,26 @@ function getPrimaryGroupId() {
   return row ? row.id : null;
 }
 
+// DEV MODE (2026-08-25) — added after a real incident: two separate
+// test/data-mixup messages leaked into the real team group in one
+// evening while building the meeting-bot feature, embarrassing and
+// confusing the team. While DEV_MODE=true in env, EVERY message that
+// would normally go to the team group (reminders, broadcasts, nudges,
+// relayed confirmations) is redirected to Babe's own personal chat
+// instead — a hard guarantee the team group stays silent no matter
+// what bug shows up mid-development, without having to individually
+// audit every send site each time. Turn off (unset or 'false') once
+// a feature is actually ready to go live to the team again.
+function isDevMode() {
+  return process.env.DEV_MODE === 'true';
+}
+// Any function about to send a message meant for "the team" should run
+// its target group id through this first.
+function resolveBroadcastTarget(groupId) {
+  if (isDevMode()) return process.env.BABE_USER_ID || groupId;
+  return groupId;
+}
+
 module.exports = {
   getRoster,
   upsertGroup,
@@ -103,4 +123,6 @@ module.exports = {
   linkSession,
   closeSession,
   getPrimaryGroupId,
+  isDevMode,
+  resolveBroadcastTarget,
 };

@@ -79,7 +79,7 @@ const client = new line.Client({
 
 function push(groupId, text) {
   if (dryRunMode) { lastDryRunMessage = { type: 'text', text }; return Promise.resolve({ dryRun: true }); }
-  return client.pushMessage(groupId, { type: 'text', text });
+  return client.pushMessage(gs.resolveBroadcastTarget(groupId), { type: 'text', text });
 }
 
 // Dry-run mode: lets test commands compose the exact message that would
@@ -120,10 +120,11 @@ function createMentionBuilder() {
     },
     addMention(user) {
       if (!user?.id) return this;
-      if (!REAL_LINE_ID.test(user.id)) {
-        // Not a real LINE account (sheet-only pseudo-user) — can't be
-        // mentioned at all; show the plain name so the message still
-        // reads correctly instead of silently dropping the reference.
+      // Dev mode redirects everything to Babe's personal 1:1 chat (see
+      // groupState.js) — a real @mention only works when the target is
+      // a group the mentioned person is actually in, so keep it as
+      // plain readable name text instead of a broken/rejected mention.
+      if (!REAL_LINE_ID.test(user.id) || gs.isDevMode()) {
         text += user.display_name || '';
         return this;
       }
@@ -142,7 +143,7 @@ function createMentionBuilder() {
 
 function pushMessage(groupId, message) {
   if (dryRunMode) { lastDryRunMessage = message; return Promise.resolve({ dryRun: true }); }
-  return client.pushMessage(groupId, message);
+  return client.pushMessage(gs.resolveBroadcastTarget(groupId), message);
 }
 
 // Convenience wrapper for the common case: plain text with a list of
