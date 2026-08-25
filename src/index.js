@@ -1587,6 +1587,22 @@ app.get('/debug/fix-sqnxr-topic-2026-08-25', (req, res) => {
   res.json({ ok: true, cleanedTopicId: topic.id, newPrTopicId, linkCleared: needsLinkClear });
 });
 
+app.get('/debug/dedupe-pr-topic-2026-08-25', (req, res) => {
+  const rows = db.all(
+    `SELECT id, created_at FROM topics WHERE title = 'อัปเดตทีม PR — Highlight Clip & กำหนดการ Set up' ORDER BY created_at ASC`
+  );
+  if (rows.length <= 1) {
+    return res.json({ ok: true, alreadyClean: true, count: rows.length });
+  }
+  const keepId = rows[0].id;
+  const deleteIds = rows.slice(1).map((r) => r.id);
+  for (const id of deleteIds) {
+    db.run(`DELETE FROM topics WHERE id = ?`, [id]);
+    db.run(`DELETE FROM topic_participants WHERE topic_id = ?`, [id]);
+  }
+  res.json({ ok: true, kept: keepId, deleted: deleteIds });
+});
+
 app.post('/webhook', line.middleware(lineConfig), (req, res) => {
   // Respond to LINE immediately, BEFORE doing any slow work (Claude +
   // Google Calendar calls can take several seconds). This was the real
