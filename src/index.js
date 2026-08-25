@@ -391,11 +391,22 @@ function buildOpenThreadSummary(session) {
   }
   const tableByType = { event: 'events', task: 'tasks', topic: 'topics' };
   const table = tableByType[session.linked_ref_type] || 'tasks';
-  const row = db.get(`SELECT title FROM ${table} WHERE id = ?`, [session.linked_ref_id]);
+  // FIX (real bug confirmed live 2026-08-25): this only ever selected
+  // `title` — so even though Claude correctly knew WHICH event a
+  // follow-up like "ขอลิงค์ด้วย" was about (via the title), it had no
+  // way to actually answer, because the real answer (meeting_link)
+  // was never given to it in the first place. Include the fields a
+  // natural follow-up question would actually need.
+  const row = session.linked_ref_type === 'event'
+    ? db.get(`SELECT title, start_time, meeting_link FROM events WHERE id = ?`, [session.linked_ref_id])
+    : db.get(`SELECT title FROM ${table} WHERE id = ?`, [session.linked_ref_id]);
+  const summary = row?.title
+    ? (row.meeting_link ? `${row.title} — เวลา ${row.start_time} — ลิงก์: ${row.meeting_link}` : row.title)
+    : '(ไม่พบชื่อ)';
   return {
     type: session.linked_ref_type,
     id: session.linked_ref_id,
-    summary: row?.title || '(ไม่พบชื่อ)',
+    summary,
   };
 }
 
@@ -1253,9 +1264,18 @@ async function handlePersonal(event, { text, imageBase64, imageMediaType }) {
     gs.closeSession(sessionId, 'topic_changed');
   }
 
-  const personalReply = decision.reply_message
-    ? decision.reply_message + (relayed ? '\nส่งเข้ากลุ่มทีมให้แล้วนะคะ' : '')
-    : groupOverrideReply;
+  // FIX (real bug confirmed live 2026-08-25): this had the priority
+  // backwards. applyDecision's return value (groupOverrideReply) is
+  // what actually reflects what got created/written — e.g. create_event
+  // appends "🔗 <meetLink>" to decision.reply_message before returning
+  // it. Using decision.reply_message FIRST discarded that entirely, so
+  // every meeting created from personal chat showed a confirmation with
+  // no link at all. Mirrors the group handler's existing (correct)
+  // pattern: `overrideReply || decision.reply_message`.
+  const baseReply = groupOverrideReply || decision.reply_message;
+  const personalReply = baseReply
+    ? baseReply + (relayed ? '\nส่งเข้ากลุ่มทีมให้แล้วนะคะ' : '')
+    : null;
 
   if (personalReply) {
     await reply(event.replyToken, personalReply);
