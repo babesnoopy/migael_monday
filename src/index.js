@@ -42,6 +42,21 @@ const app = express();
 app.use('/reports', express.static(require('path').join(__dirname, '..', 'data', 'reports')));
 app.use('/uploads', express.static(UPLOADS_DIR));
 
+app.get('/debug/find-task', (req, res) => {
+  const q = req.query.q || '';
+  const rows = db.all(
+    `SELECT t.id, t.title, t.status, t.due_date, t.assignee_id, t.created_at, u.display_name as assignee_name
+     FROM tasks t LEFT JOIN users u ON t.assignee_id = u.id
+     WHERE t.title LIKE ? ORDER BY t.created_at DESC`,
+    [`%${q}%`]
+  );
+  const taskIds = rows.map((r) => r.id);
+  const reminders = taskIds.length
+    ? db.all(`SELECT * FROM reminders WHERE ref_type='task' AND ref_id IN (${taskIds.map(() => '?').join(',')}) ORDER BY sent_at DESC`, taskIds)
+    : [];
+  res.json({ tasks: rows, reminders });
+});
+
 app.get('/debug/fix-event-date', async (req, res) => {
   const { id, newStartTime } = req.query;
   if (!id || !newStartTime) return res.status(400).json({ ok: false, error: 'missing id or newStartTime query param' });
