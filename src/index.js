@@ -42,6 +42,25 @@ const app = express();
 app.use('/reports', express.static(require('path').join(__dirname, '..', 'data', 'reports')));
 app.use('/uploads', express.static(UPLOADS_DIR));
 
+app.get('/debug/fix-event-date', async (req, res) => {
+  const { id, newStartTime } = req.query;
+  if (!id || !newStartTime) return res.status(400).json({ ok: false, error: 'missing id or newStartTime query param' });
+  const eventRow = db.get(`SELECT * FROM events WHERE id = ?`, [id]);
+  if (!eventRow) return res.status(404).json({ ok: false, error: 'event not found' });
+
+  // Cancel the old bot (was scheduled for the wrong time) before
+  // updating the date, then schedule a fresh one for the corrected time.
+  if (eventRow.recall_bot_id) await recallApi.deleteScheduledBot(eventRow.recall_bot_id);
+  db.run(`UPDATE events SET start_time = ?, recall_bot_id = NULL, recall_bot_status = NULL WHERE id = ?`, [newStartTime, id]);
+
+  let bot = null;
+  if (eventRow.meeting_link) {
+    bot = await recallApi.scheduleBotForMeeting({ meetingUrl: eventRow.meeting_link, joinAt: newStartTime });
+    if (bot?.id) db.run(`UPDATE events SET recall_bot_id = ?, recall_bot_status = ? WHERE id = ?`, [bot.id, bot.status, id]);
+  }
+  res.json({ ok: true, id, newStartTime, bot });
+});
+
 app.get('/debug/schedule-bot-for-event', async (req, res) => {
   const id = req.query.id;
   if (!id) return res.status(400).json({ ok: false, error: 'missing id query param' });
