@@ -250,11 +250,32 @@ function formatMeetingDateTime(dbDateString) {
   return `${datePart} ${timePart} น.`;
 }
 
+// Dedup guard for once-a-day broadcasts (2026-08-26 incident — see
+// broadcast_log table comment in db.js for the full story). Whichever
+// process's INSERT lands first "wins" the right to send; every other
+// process (if more than one happens to be alive at once) gets a UNIQUE
+// constraint failure and skips — a hard guarantee independent of ever
+// figuring out WHY multiple processes were running. `force` (used by
+// manual/debug-triggered previews) bypasses the guard entirely, since
+// that's an explicit human "send it again right now" request.
+function claimBroadcastSlot(type, force) {
+  if (force) return true;
+  const key = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' });
+  try {
+    db.run(`INSERT INTO broadcast_log (id, broadcast_type, sent_key) VALUES (?, ?, ?)`, [require('crypto').randomUUID(), type, key]);
+    return true;
+  } catch (err) {
+    console.log(`[claimBroadcastSlot] ${type} already sent today — skipping duplicate (another process/run got there first)`);
+    return false;
+  }
+}
+
 // ---- Morning: what to do today, grouped by person, sorted by urgency ----
 // intro/outro let a one-off special announcement wrap the normal content
 // (e.g. "Migael has some new features today...") without needing a
 // separate message template — used for the 2026-08-02 rollout announcement.
 async function sendMorningBriefing({ force = false, intro = null, outro = null } = {}) {
+  if (!claimBroadcastSlot('morning_briefing', force)) return;
   const groupId = gs.getPrimaryGroupId();
   if (!groupId) return;
 
@@ -371,6 +392,7 @@ cron.schedule('0 10 * * *', withAlert('morning briefing', sendMorningBriefing), 
 // are due today or already overdue — merged midday+afternoon slot per
 // spec (was two separate broadcasts; team asked for one at 15:00). ----
 async function sendAfternoonCheckin({ force = false } = {}) {
+  if (!claimBroadcastSlot('afternoon_checkin', force)) return;
   const groupId = gs.getPrimaryGroupId();
   if (!groupId) return;
 
@@ -628,6 +650,7 @@ cron.schedule('30 10 * * *', withAlert('stale topic nudge', async () => {
 
 // ---- Evening: recap + tomorrow prep ----
 async function sendEveningRecap({ force = false } = {}) {
+  if (!claimBroadcastSlot('evening_recap', force)) return;
   const groupId = gs.getPrimaryGroupId();
 
   // Generate Babe's personal summary report (see reports.js — this is
@@ -770,6 +793,7 @@ function checklistSheetLink() {
 }
 
 async function sendSecondaryMidday({ force = false } = {}) {
+  if (!claimBroadcastSlot('secondary_midday', force)) return;
   const groupId = process.env.SECONDARY_GROUP_ID;
   if (!groupId) return;
 
@@ -787,6 +811,7 @@ async function sendSecondaryMidday({ force = false } = {}) {
 cron.schedule('0 15 * * *', withAlert('secondary midday pointer', sendSecondaryMidday), { timezone: 'Asia/Bangkok' });
 
 async function sendSecondaryEveningPointer({ force = false } = {}) {
+  if (!claimBroadcastSlot('secondary_evening_pointer', force)) return;
   const groupId = process.env.SECONDARY_GROUP_ID;
   if (!groupId) return;
 

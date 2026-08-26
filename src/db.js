@@ -73,6 +73,24 @@ async function init() {
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
+  // Dedup guard for scheduled broadcasts (2026-08-26) — real incident:
+  // multiple server instances/processes ended up running at once (each
+  // with their own independent node-cron scheduler), so every single
+  // broadcast at 22:00 fired 6-8 times across every group. UNIQUE on
+  // (broadcast_type, sent_key) means whichever process's INSERT lands
+  // first "wins" the right to actually send; every other process's
+  // INSERT fails and they skip sending — a hard guarantee regardless of
+  // how many processes/crons are simultaneously alive, so this doesn't
+  // depend on ever tracking down why duplicates happened in the first
+  // place.
+  db.run(`CREATE TABLE IF NOT EXISTS broadcast_log (
+    id TEXT PRIMARY KEY,
+    broadcast_type TEXT NOT NULL,
+    sent_key TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(broadcast_type, sent_key)
+  )`);
+
   // Lets a plain task (due date only, no specific time) also get an
   // all-day Calendar entry, and remember which Google event that was —
   // added after tasks already existed in production, so check first
