@@ -848,4 +848,5 @@ module.exports = {
   checkOverdueTasks,
   setDryRun,
   getLastDryRunMessage,
+  push, // exposed temporarily for direct real-send diagnostics (2026-08-27)
 };

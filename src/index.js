@@ -42,6 +42,13 @@ const app = express();
 app.use('/reports', express.static(require('path').join(__dirname, '..', 'data', 'reports')));
 app.use('/uploads', express.static(UPLOADS_DIR));
 
+app.get('/debug/test-real-push', async (req, res) => {
+  const scheduler = require('./scheduler');
+  const babeId = process.env.BABE_USER_ID;
+  const result = await scheduler.push(babeId, `🧪 ทดสอบส่งจริง ${new Date().toISOString()}`);
+  res.json({ ok: true, result });
+});
+
 app.get('/debug/push-call-log', (req, res) => {
   const rows = db.all(`SELECT * FROM push_call_log ORDER BY created_at DESC LIMIT 50`);
   res.json(rows);
