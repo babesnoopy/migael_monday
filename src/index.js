@@ -42,6 +42,13 @@ const app = express();
 app.use('/reports', express.static(require('path').join(__dirname, '..', 'data', 'reports')));
 app.use('/uploads', express.static(UPLOADS_DIR));
 
+app.get('/debug/test-real-push-group', async (req, res) => {
+  const scheduler = require('./scheduler');
+  const groupId = gs.getPrimaryGroupId();
+  const result = await scheduler.push(groupId, `🧪 ทดสอบส่งเข้ากลุ่มจริง ${new Date().toISOString()}`);
+  res.json({ ok: true, groupId, result });
+});
+
 app.get('/debug/test-real-push', async (req, res) => {
   const scheduler = require('./scheduler');
   const babeId = process.env.BABE_USER_ID;
