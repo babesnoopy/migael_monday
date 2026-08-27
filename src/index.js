@@ -42,6 +42,12 @@ const app = express();
 app.use('/reports', express.static(require('path').join(__dirname, '..', 'data', 'reports')));
 app.use('/uploads', express.static(UPLOADS_DIR));
 
+app.get('/debug/test-real-evening-recap', async (req, res) => {
+  const scheduler = require('./scheduler');
+  await scheduler.sendEveningRecap({ force: true });
+  res.json({ ok: true });
+});
+
 app.get('/debug/test-real-push-group', async (req, res) => {
   const scheduler = require('./scheduler');
   const groupId = gs.getPrimaryGroupId();
