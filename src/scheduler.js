@@ -79,15 +79,11 @@ const client = new line.Client({
 
 function push(groupId, text) {
   if (dryRunMode) { lastDryRunMessage = { type: 'text', text }; return Promise.resolve({ dryRun: true }); }
-  // FIX (real incident 2026-08-26/27): confirmed via broadcast_log that
-  // our own code only ever called this once per broadcast, yet the team
-  // saw the identical message 6-8 times in LINE. That points to a
-  // network-level retry (Railway↔LINE) resending the exact same HTTP
-  // request, which LINE's API — with no retry key — treats as a brand
-  // new message each time. X-Line-Retry-Key tells LINE "if you see this
-  // exact key again, it's a retry of the same send, not a new message."
-  client.setRequestOptionOnce({ retryKey: require('crypto').randomUUID() });
-  return client.pushMessage(gs.resolveBroadcastTarget(groupId), { type: 'text', text });
+  const retryKey = require('crypto').randomUUID();
+  const target = gs.resolveBroadcastTarget(groupId);
+  db.run(`INSERT INTO push_call_log (id, target, retry_key, text_snippet) VALUES (?, ?, ?, ?)`, [require('crypto').randomUUID(), target, retryKey, text.slice(0, 60)]);
+  client.setRequestOptionOnce({ retryKey });
+  return client.pushMessage(target, { type: 'text', text });
 }
 
 // Dry-run mode: lets test commands compose the exact message that would
@@ -151,8 +147,11 @@ function createMentionBuilder() {
 
 function pushMessage(groupId, message) {
   if (dryRunMode) { lastDryRunMessage = message; return Promise.resolve({ dryRun: true }); }
-  client.setRequestOptionOnce({ retryKey: require('crypto').randomUUID() });
-  return client.pushMessage(gs.resolveBroadcastTarget(groupId), message);
+  const retryKey = require('crypto').randomUUID();
+  const target = gs.resolveBroadcastTarget(groupId);
+  db.run(`INSERT INTO push_call_log (id, target, retry_key, text_snippet) VALUES (?, ?, ?, ?)`, [require('crypto').randomUUID(), target, retryKey, JSON.stringify(message).slice(0, 60)]);
+  client.setRequestOptionOnce({ retryKey });
+  return client.pushMessage(target, message);
 }
 
 // Convenience wrapper for the common case: plain text with a list of

@@ -91,6 +91,19 @@ async function init() {
     UNIQUE(broadcast_type, sent_key)
   )`);
 
+  // Temporary deep-diagnostic log (2026-08-27) — logs literally every
+  // single JS-level call to push()/pushMessage(), with the exact retry
+  // key used, so we can directly count real invocations vs. what LINE
+  // actually delivered — broadcast_log alone wasn't enough to explain
+  // continued duplicates even with retry keys applied.
+  db.run(`CREATE TABLE IF NOT EXISTS push_call_log (
+    id TEXT PRIMARY KEY,
+    target TEXT,
+    retry_key TEXT,
+    text_snippet TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
   // Lets a plain task (due date only, no specific time) also get an
   // all-day Calendar entry, and remember which Google event that was —
   // added after tasks already existed in production, so check first
