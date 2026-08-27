@@ -1288,6 +1288,7 @@ async function handlePersonal(event, { text, imageBase64, imageMediaType }) {
       const publicUrl = `${(process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '')}/uploads/${filename}`;
 
       const relayTarget = gs.resolveBroadcastTarget(relayGroupId);
+      client.setRequestOptionOnce({ retryKey: randomUUID() });
       await client.pushMessage(relayTarget, { type: 'image', originalContentUrl: publicUrl, previewImageUrl: publicUrl });
 
       // Extract just the caption Babe wants said (strip the "ส่งรูปนี้เข้า
@@ -1295,6 +1296,7 @@ async function handlePersonal(event, { text, imageBase64, imageMediaType }) {
       // can't cleanly separate it.
       const captionMatch = text.match(/(?:บอกว่า|แจ้งว่า)\s*(.+)/);
       const caption = captionMatch ? captionMatch[1].trim() : text;
+      client.setRequestOptionOnce({ retryKey: randomUUID() });
       await client.pushMessage(relayTarget, { type: 'text', text: caption });
 
       recentPersonalImage.delete(userId);
@@ -1389,6 +1391,7 @@ async function handlePersonal(event, { text, imageBase64, imageMediaType }) {
       const teamMessage = groupOverrideReply || decision.reply_message;
       if (teamMessage) {
         relayed = true;
+        client.setRequestOptionOnce({ retryKey: randomUUID() });
         await client.pushMessage(gs.resolveBroadcastTarget(relayGroupId), { type: 'text', text: teamMessage }).catch((err) => {
           console.error('[handlePersonal] Failed to relay to team group:', err.message);
         });
@@ -1958,8 +1961,10 @@ app.post('/webhook/recall', express.raw({ type: 'application/json' }), (req, res
       const shortLink = `${(process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '')}/rec/${eventRow.id}`;
       const msg = `🎥 บันทึกประชุม "${eventRow.title}" เสร็จแล้วค่ะ:\n${shortLink}`;
       if (eventRow.created_by && allowedPersonal.includes(eventRow.created_by)) {
+        client.setRequestOptionOnce({ retryKey: randomUUID() });
         await client.pushMessage(eventRow.created_by, { type: 'text', text: msg }).catch((err) => console.error('[Recall webhook] push to personal failed:', err.message));
       } else if (eventRow.group_id) {
+        client.setRequestOptionOnce({ retryKey: randomUUID() });
         await client.pushMessage(gs.resolveBroadcastTarget(eventRow.group_id), { type: 'text', text: msg }).catch((err) => console.error('[Recall webhook] push to group failed:', err.message));
       }
     })().catch((err) => console.error('[Recall webhook] done-handling failed:', err.message));
