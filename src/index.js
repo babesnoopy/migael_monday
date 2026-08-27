@@ -42,6 +42,12 @@ const app = express();
 app.use('/reports', express.static(require('path').join(__dirname, '..', 'data', 'reports')));
 app.use('/uploads', express.static(UPLOADS_DIR));
 
+app.get('/debug/broadcast-log-check', (req, res) => {
+  const schema = db.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='broadcast_log'`);
+  const rows = db.all(`SELECT * FROM broadcast_log ORDER BY created_at DESC LIMIT 30`);
+  res.json({ schema, rows });
+});
+
 app.get('/debug/find-task', (req, res) => {
   const q = req.query.q || '';
   const rows = db.all(
