@@ -474,6 +474,15 @@ async function checkMeetingReminders() {
     ));
     if (!toRemind.length) continue;
 
+    // Same atomic-claim-before-send fix as checkOverdueTasks below.
+    for (const e of toRemind) {
+      db.run(
+        `INSERT INTO reminders (id, ref_type, ref_id, reminder_type, scheduled_at, sent_at, group_id)
+         VALUES (?, 'event', ?, ?, datetime('now'), datetime('now'), ?)`,
+        [require('crypto').randomUUID(), e.id, `pre_${window}min`, groupId]
+      );
+    }
+
     const mb = createMentionBuilder();
     mb.add(`⏰ เตือนค่ะ อีก ${window} นาที ถึงเวลาแล้ว:\n`);
     const allAttendees = new Map();
@@ -492,14 +501,6 @@ async function checkMeetingReminders() {
       for (const a of allAttendees.values()) mb.addMention(a).add(' ');
     }
     await pushMessage(groupId, mb.build());
-
-    for (const e of toRemind) {
-      db.run(
-        `INSERT INTO reminders (id, ref_type, ref_id, reminder_type, scheduled_at, sent_at, group_id)
-         VALUES (?, 'event', ?, ?, datetime('now'), datetime('now'), ?)`,
-        [require('crypto').randomUUID(), e.id, `pre_${window}min`, groupId]
-      );
-    }
   }
 }
 
@@ -542,6 +543,23 @@ async function checkOverdueTasks() {
 
   if (!dueForReminder.length) return;
 
+  // FIX (real incident confirmed live 2026-08-28 via push_call_log —
+  // two genuinely separate sends 5 minutes apart, different retry keys):
+  // this used to send FIRST, then record "reminded" afterward. Any gap
+  // between those two steps — even just bad luck — leaves a window
+  // where the next 5-minute tick still sees "never reminded" and fires
+  // again for real. Claim the reminder BEFORE sending instead, same
+  // atomic-insert-wins pattern as claimBroadcastSlot: worst case (send
+  // fails after claiming) we skip one legitimate nudge, which is far
+  // safer than the team getting spammed with duplicates again.
+  for (const t of dueForReminder) {
+    db.run(
+      `INSERT INTO reminders (id, ref_type, ref_id, reminder_type, scheduled_at, sent_at, group_id)
+       VALUES (?, 'task', ?, 'overdue', datetime('now'), datetime('now'), ?)`,
+      [require('crypto').randomUUID(), t.id, groupId]
+    );
+  }
+
   const mb = createMentionBuilder();
   mb.add(`🔴 แจ้งเตือนค่ะ งานที่เลยกำหนดเสร็จแล้ว (${dueForReminder.length} รายการ) ขออัปเดตสถานะด้วยค่ะ\n`);
   for (const t of dueForReminder) {
@@ -550,14 +568,6 @@ async function checkOverdueTasks() {
     mb.add('\n');
   }
   await pushMessage(groupId, mb.build());
-
-  for (const t of dueForReminder) {
-    db.run(
-      `INSERT INTO reminders (id, ref_type, ref_id, reminder_type, scheduled_at, sent_at, group_id)
-       VALUES (?, 'task', ?, 'overdue', datetime('now'), datetime('now'), ?)`,
-      [require('crypto').randomUUID(), t.id, groupId]
-    );
-  }
 }
 
 // ---- Approaching-deadline reminder: per Babe's explicit request
@@ -596,6 +606,15 @@ async function checkApproachingDeadlines() {
 
   if (!dueForReminder.length) return;
 
+  // Same atomic-claim-before-send fix as checkOverdueTasks above.
+  for (const t of dueForReminder) {
+    db.run(
+      `INSERT INTO reminders (id, ref_type, ref_id, reminder_type, scheduled_at, sent_at, group_id)
+       VALUES (?, 'task', ?, 'deadline_approaching', datetime('now'), datetime('now'), ?)`,
+      [require('crypto').randomUUID(), t.id, groupId]
+    );
+  }
+
   const mb = createMentionBuilder();
   mb.add(`⏳ แจ้งเตือนค่ะ งานที่ใกล้ถึงกำหนดส่งแล้ว (${dueForReminder.length} รายการ)\n`);
   for (const t of dueForReminder) {
@@ -605,14 +624,6 @@ async function checkApproachingDeadlines() {
     mb.add('\n');
   }
   await pushMessage(groupId, mb.build());
-
-  for (const t of dueForReminder) {
-    db.run(
-      `INSERT INTO reminders (id, ref_type, ref_id, reminder_type, scheduled_at, sent_at, group_id)
-       VALUES (?, 'task', ?, 'deadline_approaching', datetime('now'), datetime('now'), ?)`,
-      [require('crypto').randomUUID(), t.id, groupId]
-    );
-  }
 }
 cron.schedule('0 11 * * *', withAlert('approaching deadline check', checkApproachingDeadlines), { timezone: 'Asia/Bangkok' });
 
@@ -620,6 +631,7 @@ cron.schedule('0 11 * * *', withAlert('approaching deadline check', checkApproac
 // while, tagging whoever was involved — this is what keeps ideas/specs
 // from silently dying in chat once the conversation moves on. ----
 cron.schedule('30 10 * * *', withAlert('stale topic nudge', async () => {
+  if (!claimBroadcastSlot('stale_topic_nudge', false)) return;
   const groupId = gs.getPrimaryGroupId();
   if (!groupId) return;
 
