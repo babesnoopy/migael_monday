@@ -28,6 +28,15 @@ const { alertBabe } = require('./alertBabe');
 // notices is exactly the gap it exists to close.
 function withAlert(kind, fn) {
   return async () => {
+    // EMERGENCY KILL SWITCH (2026-08-29) — stronger than DEV_MODE: DEV_MODE
+    // still sends (just redirects target), which was still cluttering
+    // Babe's personal chat with confusing/wrong content. Set
+    // PAUSE_BROADCASTS=true in env to make every single cron job a
+    // total no-op — nothing sends anywhere, to anyone, until turned off.
+    if (process.env.PAUSE_BROADCASTS === 'true') {
+      console.log(`[withAlert] PAUSE_BROADCASTS is on — skipping: ${kind}`);
+      return;
+    }
     try {
       await fn();
     } catch (err) {
