@@ -86,10 +86,30 @@ const client = new line.Client({
   channelSecret: process.env.LINE_CHANNEL_SECRET,
 });
 
+// Extra safety net (2026-08-30) — on top of claimBroadcastSlot (per
+// broadcast TYPE) and retry keys (per HTTP request), this blocks by
+// actual CONTENT: same exact text to the same target within a 10-min
+// window is refused outright, regardless of which code path produced
+// it or why. Doesn't require knowing the root cause of a duplicate —
+// if the exact same message is about to go out twice in quick
+// succession, something is wrong, full stop.
+function claimContentSlot(target, text) {
+  const hash = require('crypto').createHash('sha256').update(`${target}|${text}`).digest('hex').slice(0, 16);
+  const bucket = Math.floor(Date.now() / (10 * 60 * 1000));
+  try {
+    db.run(`INSERT INTO broadcast_log (id, broadcast_type, sent_key) VALUES (?, ?, ?)`, [require('crypto').randomUUID(), `content:${hash}`, String(bucket)]);
+    return true;
+  } catch (err) {
+    console.log('[claimContentSlot] duplicate content blocked (same message, same target, within 10 min)');
+    return false;
+  }
+}
+
 function push(groupId, text) {
   if (dryRunMode) { lastDryRunMessage = { type: 'text', text }; return Promise.resolve({ dryRun: true }); }
-  const retryKey = require('crypto').randomUUID();
   const target = gs.resolveBroadcastTarget(groupId);
+  if (!claimContentSlot(target, text)) return Promise.resolve({ blocked: true });
+  const retryKey = require('crypto').randomUUID();
   db.run(`INSERT INTO push_call_log (id, target, retry_key, text_snippet) VALUES (?, ?, ?, ?)`, [require('crypto').randomUUID(), target, retryKey, text.slice(0, 60)]);
   client.setRequestOptionOnce({ retryKey });
   return client.pushMessage(target, { type: 'text', text });
@@ -156,9 +176,11 @@ function createMentionBuilder() {
 
 function pushMessage(groupId, message) {
   if (dryRunMode) { lastDryRunMessage = message; return Promise.resolve({ dryRun: true }); }
-  const retryKey = require('crypto').randomUUID();
   const target = gs.resolveBroadcastTarget(groupId);
-  db.run(`INSERT INTO push_call_log (id, target, retry_key, text_snippet) VALUES (?, ?, ?, ?)`, [require('crypto').randomUUID(), target, retryKey, JSON.stringify(message).slice(0, 60)]);
+  const contentKey = JSON.stringify(message);
+  if (!claimContentSlot(target, contentKey)) return Promise.resolve({ blocked: true });
+  const retryKey = require('crypto').randomUUID();
+  db.run(`INSERT INTO push_call_log (id, target, retry_key, text_snippet) VALUES (?, ?, ?, ?)`, [require('crypto').randomUUID(), target, retryKey, contentKey.slice(0, 60)]);
   client.setRequestOptionOnce({ retryKey });
   return client.pushMessage(target, message);
 }
@@ -296,6 +318,21 @@ async function sendMorningBriefing({ force = false, intro = null, outro = null }
   const groupId = gs.getPrimaryGroupId();
   if (!groupId) return;
 
+  // SIMPLIFIED (2026-08-30, per Babe's explicit request after repeated
+  // wrong-data + duplicate-send incidents) — no more computed per-
+  // person/category task breakdown pulled from our own DB, which can
+  // drift out of sync with reality. Just point straight at the actual
+  // Google Sheet, the real source of truth, every time. The detailed
+  // logic below is left in place (not deleted) in case this gets
+  // revisited later — just bypassed for now via this early return.
+  {
+    const link = checklistSheetLink();
+    let text = `📋 วันนี้สิ่งที่ต้องทำ | ${formatThaiHeaderDate()}\nเช็ครายละเอียดงานวันนี้ได้ที่ชีทเลยค่ะ`;
+    if (link) text += `\n${link}`;
+    await push(groupId, text);
+    return;
+  }
+
   const todayIso = bangkokTodayIso();
   const roster = gs.getRoster(groupId);
   const uncommuEvents = await getTodayUncommuEvents();
@@ -413,6 +450,15 @@ async function sendAfternoonCheckin({ force = false } = {}) {
   const groupId = gs.getPrimaryGroupId();
   if (!groupId) return;
 
+  // SIMPLIFIED (2026-08-30) — see sendMorningBriefing's comment above.
+  {
+    const link = checklistSheetLink();
+    let text = `🔄 เช็คความคืบหน้า | ${formatThaiHeaderDate()} 15:00\nอัปเดตสถานะงานได้ที่ชีทเลยค่ะ`;
+    if (link) text += `\n${link}`;
+    await push(groupId, text);
+    return;
+  }
+
   const relevant = db.all(
     `SELECT t.title, u.id as assignee_id, u.display_name as assignee FROM tasks t
      LEFT JOIN users u ON t.assignee_id = u.id
@@ -514,6 +560,15 @@ async function checkMeetingReminders() {
 }
 
 async function checkOverdueTasks() {
+  // DISABLED (2026-08-30, per Babe's explicit request) — this computed
+  // "overdue" status from our own DB's task records, which drifted out
+  // of sync with the real Google Sheet more than once (confirmed real
+  // incident: nagged about a task the team had already marked done in
+  // the sheet). Team-facing task status now comes from the Sheet only
+  // (see sendMorningBriefing/sendAfternoonCheckin's simplified sheet-
+  // link messages) — logic below left in place but unreachable.
+  return;
+
   const groupId = gs.getPrimaryGroupId();
   if (!groupId) return;
 
@@ -588,6 +643,8 @@ async function checkOverdueTasks() {
 async function checkApproachingDeadlines() {
   const groupId = gs.getPrimaryGroupId();
   if (!groupId) return;
+  // DISABLED (2026-08-30) — same reason as checkOverdueTasks above.
+  return;
 
   const hourBangkok = Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Bangkok', hour: '2-digit', hour12: false }).format(new Date()));
   if (hourBangkok < 9 || hourBangkok >= 22) return;
@@ -643,6 +700,8 @@ cron.schedule('30 10 * * *', withAlert('stale topic nudge', async () => {
   if (!claimBroadcastSlot('stale_topic_nudge', false)) return;
   const groupId = gs.getPrimaryGroupId();
   if (!groupId) return;
+  // DISABLED (2026-08-30) — same reason as checkOverdueTasks above.
+  return;
 
   const staleTopics = db.all(
     `SELECT * FROM topics WHERE status = 'open' AND datetime(updated_at) < datetime('now', '-3 days')`
@@ -681,6 +740,16 @@ cron.schedule('30 10 * * *', withAlert('stale topic nudge', async () => {
 async function sendEveningRecap({ force = false } = {}) {
   if (!claimBroadcastSlot('evening_recap', force)) return;
   const groupId = gs.getPrimaryGroupId();
+  if (!groupId) return;
+
+  // SIMPLIFIED (2026-08-30) — see sendMorningBriefing's comment above.
+  {
+    const link = checklistSheetLink();
+    let text = `🌙 สรุปวันนี้ | ${formatThaiHeaderDate()}\nดูสถานะงานล่าสุดได้ที่ชีทเลยค่ะ`;
+    if (link) text += `\n${link}`;
+    await push(groupId, text);
+    return;
+  }
 
   // Generate Babe's personal summary report (see reports.js — this is
   // now a short overview, not a raw checklist to copy-paste, since
